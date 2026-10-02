@@ -51,16 +51,16 @@ __device__ static const float OSRS_ITEM_OBS_TABLE_DEV
 #ifdef PUFFER_CRAFTAX
 #include "../ocean/craftax/craftax.cu"
 #endif
-#if defined(PUFFER_DECISION_LAYA)
-#include "../ocean/decision_laya/decision_laya.cu"
+#if defined(PUFFER_DECISION_POLICY)
+#include "decision_policy.cuh"
 #elif defined(PUFFER_DECISION_SNAKE)
 #include "../ocean/decision_snake/decision_snake.cu"
 #endif
 
 // Override encoder vtable when this env has a custom net. No-op otherwise.
 static void create_custom_encoder(Encoder* enc) {
-#if defined(PUFFER_DECISION_LAYA)
-    create_decision_laya_encoder(enc);
+#if defined(PUFFER_DECISION_POLICY)
+    create_decision_policy_encoder(enc);
 #elif defined(PUFFER_DECISION_SNAKE)
     create_decision_snake_encoder(enc);
 #elif defined(PUFFER_NETHACK)
@@ -93,8 +93,8 @@ static void create_custom_encoder(Encoder* enc) {
 }
 
 static void create_custom_decoder(Decoder* dec) {
-#ifdef PUFFER_DECISION_SNAKE
-    create_decision_snake_decoder(dec);
+#if defined(PUFFER_DECISION_POLICY) || defined(PUFFER_DECISION_SNAKE)
+    create_decision_decoder(dec);
 #elif defined(PUFFER_NETHACK)
     create_nethack_decoder(dec);
 #else
@@ -105,8 +105,8 @@ static void create_custom_decoder(Decoder* dec) {
 // A Transformer over the current observation has no recurrent state. Other
 // environments retain the native MinGRU selected by build_arch.
 static void create_custom_network(Network* network) {
-#ifdef PUFFER_DECISION_SNAKE
-    create_decision_snake_network(network);
+#if defined(PUFFER_DECISION_POLICY) || defined(PUFFER_DECISION_SNAKE)
+    create_decision_network(network);
 #else
     (void)network;
 #endif

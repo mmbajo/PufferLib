@@ -130,7 +130,8 @@ Other collectors must also use the value of `transition.observations` when
 `truncated=1`, set the future value to zero when `terminated=1`, and stop GAE
 propagation across either reset. Bootstrapping from the autoreset observation or
 silently treating every timeout as death changes the experiment. The header
-defines `PUF_HAS_TRUNCATION` to identify that contract.
+defines `PUF_HAS_TRUNCATION` and supplies `puf_truncation_observation` to expose
+that contract to the native collector, independently of the policy architecture.
 
 The default build includes a simple Raylib board renderer. Define
 `PUF_HEADLESS` when compiling a standalone test without rendering;

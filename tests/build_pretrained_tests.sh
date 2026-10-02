@@ -6,15 +6,20 @@ kind="${1:-all}"
 case "$kind" in
     all)
         if [[ $# -gt 1 ]]; then echo "all does not accept an output path" >&2; exit 2; fi
-        for target in tokenizer encoder decision bundle input observation checkpoint; do "$0" "$target"; done
+        for target in tokenizer encoder decision bundle input observation checkpoint cartpole-stock cartpole-env layout-2 layout-4 layout-8 policy-cartpole policy-laya; do "$0" "$target"; done
         exit 0 ;;
-    encoder|decision|bundle|input|tokenizer|observation|checkpoint) ;;
-    *) echo "Usage: $0 [all|encoder|decision|bundle|input|tokenizer|observation|checkpoint] [OUT]" >&2; exit 2 ;;
+    policy-cartpole|policy-laya)
+        exec "$root/tests/build_decision_tests.sh" "$@" ;;
+    encoder|decision|bundle|input|tokenizer|observation|checkpoint|cartpole-stock|cartpole-env|layout-2|layout-4|layout-8) ;;
+    *) echo "Usage: $0 [all|encoder|decision|bundle|input|tokenizer|observation|checkpoint|cartpole-stock|cartpole-env|layout-{2,4,8}|policy-cartpole|policy-laya] [OUT]" >&2; exit 2 ;;
 esac
 case "$kind" in
     tokenizer) name=test_native_tokenizer ;;
     observation) name=test_decision_laya_observation ;;
     checkpoint) name=test_laya_checkpoint ;;
+    cartpole-stock) name=test_decision_cartpole_stock ;;
+    cartpole-env) name=test_decision_cartpole_env ;;
+    layout-*) name="test_decision_policy_layout_${kind#layout-}" ;;
     *) name="test_pretrained_$kind" ;;
 esac
 out="${2:-$root/build/$name}"
@@ -22,15 +27,31 @@ mkdir -p -- "$(dirname -- "$out")"
 temporary="$(mktemp -d "$(dirname -- "$out")/.pretrained-test-build.XXXXXX")"
 trap 'rm -rf -- "$temporary"' EXIT
 
+if [[ "$kind" == cartpole-stock ]]; then
+    "${CXX:-c++}" -std=c++17 -O2 -x c++ -DTEST_STOCK_CARTPOLE -I"$root/src" \
+        "$root/tests/test_decision_cartpole_env.cu" -o "$temporary/test"
+    mv -- "$temporary/test" "$out"
+    echo "Built $out"
+    exit 0
+fi
+
+source="$root/tests/$name.cu"
+case "$kind" in
+    layout-*) source="$root/tests/test_decision_policy_layout.cu" ;;
+esac
+
 objects=()
 libraries=(-lm -ldl -lpthread)
-if [[ "$kind" == tokenizer || "$kind" == bundle || "$kind" == input ||
-        "$kind" == observation || "$kind" == checkpoint ]]; then
+needs_bundle=0
+case "$kind" in
+    bundle|input|observation|checkpoint|cartpole-env|layout-*) needs_bundle=1 ;;
+esac
+if [[ "$kind" == tokenizer || "$needs_bundle" == 1 ]]; then
     archive="$root/build/libpuffer_tokenizer.a"
     rebuild=0
-    for source in "$root/tools/native_tokenizer/Cargo.toml" \
+    for tokenizer_source in "$root/tools/native_tokenizer/Cargo.toml" \
             "$root/tools/native_tokenizer/Cargo.lock" "$root/tools/native_tokenizer/src/lib.rs"; do
-        if [[ ! -f "$archive" || "$source" -nt "$archive" ]]; then rebuild=1; fi
+        if [[ ! -f "$archive" || "$tokenizer_source" -nt "$archive" ]]; then rebuild=1; fi
     done
     if [[ "$rebuild" == 1 ]]; then "$root/tools/build_native_tokenizer.sh"; fi
     objects+=("$archive")
@@ -58,7 +79,8 @@ else
             flags+=(-I"$dir/include" -L"$dir/lib64" -Xlinker -rpath -Xlinker "$dir/lib64"); break
         fi
     done
-    if [[ "$kind" == bundle || "$kind" == input || "$kind" == observation || "$kind" == checkpoint ]]; then
+    if [[ "$kind" == layout-* ]]; then flags+=("-DDECISION_ACTIONS=${kind#layout-}"); fi
+    if [[ "$needs_bundle" == 1 ]]; then
         "${CC:-cc}" -std=c11 -O2 -c "$root/vendor/cJSON.c" -o "$temporary/json.o"
         objects+=("$temporary/json.o")
     fi
@@ -66,7 +88,7 @@ else
         "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_snake/engine/snake.c" -o "$temporary/snake.o"
         objects+=("$temporary/snake.o")
     fi
-    "$nvcc" "${flags[@]}" "$root/tests/$name.cu" \
+    "$nvcc" "${flags[@]}" "$source" \
         "${objects[@]}" -lcublas -lcudart "${libraries[@]}" -o "$temporary/test"
 fi
 mv -- "$temporary/test" "$out"

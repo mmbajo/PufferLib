@@ -63,6 +63,14 @@ struct Env {
     int render_initialized;
 };
 
+// Native collector hook: retain the pre-reset input only for a pure time limit.
+// A true terminal, including one coinciding with the limit, has no bootstrap.
+static const obs_t* puf_truncation_observation(Env* env, const Agent* agent) {
+    const DecisionSnakeTransition* transition = &env->transition;
+    return agent == &env->agents[0] && transition->valid &&
+        transition->truncated && !transition->terminated ? transition->observations : NULL;
+}
+
 static void decision_snake_observe(Env* env, obs_t* observations,
         unsigned char* action_mask) {
     int32_t board[IB_SNAKE_CELLS];

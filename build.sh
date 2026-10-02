@@ -50,7 +50,14 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; then
+# A text decision environment opts in by including the shared policy header.
+# New adapters then inherit the native tokenizer/CUDA build without a name list.
+USE_DECISION_POLICY=0
+if grep -Eq '^[[:space:]]*#[[:space:]]*include[[:space:]]*["<].*decision_policy[.]h[">]' \
+        "ocean/$ENV/$ENV.h" 2>/dev/null; then
+    USE_DECISION_POLICY=1
+fi
+if [ "$ENV" = "decision_snake" ] || [ "$USE_DECISION_POLICY" = "1" ]; then
     # The Transformer backend currently uses FP32 activations and gradients.
     PRECISION="-DPRECISION_FLOAT"
     if [ "$USE_GPU_ENV" = "1" ]; then
@@ -284,18 +291,18 @@ if [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; then
         -o build/decision_snake_engine.o
     EXTRA_OBJECTS+=(build/decision_snake_engine.o)
 fi
-if [ "$ENV" = "decision_laya" ]; then
+if [ "$USE_DECISION_POLICY" = "1" ]; then
+    mkdir -p build
     TOKENIZER_ARCHIVE=${PUFFER_TOKENIZER_LIB:-build/libpuffer_tokenizer.a}
     if [[ ! -f "$TOKENIZER_ARCHIVE" || tools/native_tokenizer/Cargo.toml -nt "$TOKENIZER_ARCHIVE" ||
           tools/native_tokenizer/Cargo.lock -nt "$TOKENIZER_ARCHIVE" ||
           tools/native_tokenizer/src/lib.rs -nt "$TOKENIZER_ARCHIVE" ]]; then
         bash tools/build_native_tokenizer.sh "$TOKENIZER_ARCHIVE"
     fi
-    $CC -std=c11 $LINK_OPT -c vendor/cJSON.c -o build/decision_laya_cjson.o
-    EXTRA_OBJECTS+=(build/decision_laya_cjson.o)
+    $CC -std=c11 $LINK_OPT -c vendor/cJSON.c -o "build/${ENV}_cjson.o"
+    EXTRA_OBJECTS+=("build/${ENV}_cjson.o")
     LINK_ARCHIVES+=("$TOKENIZER_ARCHIVE")
     EXTRA_LDFLAGS+=(-ldl)
-    EXTRA_CFLAGS+=(-DPUFFER_DECISION_SNAKE)
 fi
 
 if [ "$STANDALONE" = "1" ]; then
@@ -537,7 +544,7 @@ NVCC=("$NVCC_BIN")
 if command -v ccache >/dev/null 2>&1; then NVCC=(ccache "${NVCC[@]}"); fi
 ARCH=${NVCC_ARCH:-native}
 ARCH_FLAGS=(-arch="$ARCH")
-if { [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; } && [ -z "${NVCC_ARCH:-}" ]; then
+if { [ "$ENV" = "decision_snake" ] || [ "$USE_DECISION_POLICY" = "1" ]; } && [ -z "${NVCC_ARCH:-}" ]; then
     # Native cubins avoid a PTX JIT dependency on the GPU host's driver version.
     # Keep Ampere PTX for future GPUs, and include Hopper cubins when supported.
     ARCH_FLAGS=('-gencode=arch=compute_80,code=[sm_80,compute_80]')
@@ -558,7 +565,7 @@ else
     ENV_HEADER="$SRC_DIR/$ENV.h"
 fi
 mkdir -p build
-if ! grep -q 'typedef[[:space:]].*obs_t' "$ENV_HEADER" 2>/dev/null; then
+if [ "$USE_DECISION_POLICY" != "1" ] && ! grep -q 'typedef[[:space:]].*obs_t' "$ENV_HEADER" 2>/dev/null; then
     echo "Error: $ENV_HEADER must typedef obs_t"
     exit 1
 fi

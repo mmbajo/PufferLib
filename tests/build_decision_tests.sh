@@ -5,11 +5,18 @@ set -euo pipefail
 
 kind="${1:-puffer}"
 case "$kind" in
-    puffer|transformer) ;;
-    *) echo "Usage: $0 [puffer|transformer] [OUT]" >&2; exit 2 ;;
+    puffer|transformer|policy-cartpole|policy-laya) ;;
+    *) echo "Usage: $0 [puffer|transformer|policy-cartpole|policy-laya] [OUT]" >&2; exit 2 ;;
 esac
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-out="${2:-$root/build/test_decision_$kind}"
+name="test_decision_${kind//-/_}"
+out="${2:-$root/build/$name}"
+source="$root/tests/test_decision_$kind.cu"
+env=decision_snake
+case "$kind" in
+    policy-cartpole) env=decision_cartpole; source="$root/tests/test_decision_policy.cu" ;;
+    policy-laya) env=decision_laya; source="$root/tests/test_decision_policy.cu" ;;
+esac
 cuda="${CUDA_HOME:-${CUDA_PATH:-}}"
 nvcc="${CUDACXX:-${cuda:+$cuda/bin/nvcc}}"
 nvcc="$(command -v "${nvcc:-nvcc}" || true)"
@@ -41,7 +48,7 @@ mkdir -p -- "$(dirname -- "$out")"
 temporary="$(mktemp -d "$(dirname -- "$out")/.decision-test-build.XXXXXX")"
 trap 'rm -rf -- "$temporary"' EXIT
 
-if [[ "$kind" == puffer ]]; then
+if [[ "$kind" != transformer ]]; then
     raylib="${RAYLIB_HOME:-$root/raylib-5.5_linux_amd64}"
     if [[ ! -f "$raylib/lib/libraylib.a" ]]; then
         echo "Run ./build.sh decision_snake first to fetch Raylib, or set RAYLIB_HOME" >&2
@@ -63,9 +70,9 @@ if [[ "$kind" == puffer ]]; then
     if [[ -f "$cuda/lib64/libnvJitLink.so" ]]; then
         flags+=(-Xlinker=--no-as-needed,-lnvJitLink,--as-needed)
     fi
-    flags+=(-DPRECISION_FLOAT -DPUFFER_DECISION_SNAKE -DPLATFORM_DESKTOP
-            '-DENV_HEADER="ocean/decision_snake/decision_snake.h"'
-            '-DPUFFER_ENV_NAME="decision_snake"' -DENV_NAME=decision_snake
+    flags+=(-DPRECISION_FLOAT "-DPUFFER_${env^^}" -DPLATFORM_DESKTOP
+            "-DENV_HEADER=\"ocean/$env/$env.h\""
+            "-DPUFFER_ENV_NAME=\"$env\"" "-DENV_NAME=$env"
             -I"$root/vendor" -I"$raylib/include" -Xcompiler=-fopenmp
             -Xcompiler=-Wno-narrowing --diag-suppress=2361
             --diag-suppress=111 --diag-suppress=128)
@@ -77,12 +84,25 @@ if [[ "$kind" == puffer ]]; then
     else
         libraries+=(-lGL)
     fi
-    "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_snake/engine/snake.c" \
-        -o "$temporary/snake.o"
-    objects+=("$temporary/snake.o")
+    if [[ "$env" != decision_cartpole ]]; then
+        "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_snake/engine/snake.c" \
+            -o "$temporary/snake.o"
+        objects+=("$temporary/snake.o")
+    fi
+    if [[ "$kind" == policy-* ]]; then
+        archive="$root/build/libpuffer_tokenizer.a"
+        rebuild=0
+        for item in "$root/tools/native_tokenizer/Cargo.toml" \
+                "$root/tools/native_tokenizer/Cargo.lock" "$root/tools/native_tokenizer/src/lib.rs"; do
+            if [[ ! -f "$archive" || "$item" -nt "$archive" ]]; then rebuild=1; fi
+        done
+        if [[ "$rebuild" == 1 ]]; then "$root/tools/build_native_tokenizer.sh"; fi
+        "${CC:-cc}" -std=c11 -O2 -c "$root/vendor/cJSON.c" -o "$temporary/json.o"
+        objects+=("$archive" "$temporary/json.o")
+    fi
 fi
 
-"$nvcc" "${flags[@]}" "$root/tests/test_decision_$kind.cu" \
+"$nvcc" "${flags[@]}" "$source" \
     "${objects[@]}" "${libraries[@]}" -o "$temporary/test"
 mv -- "$temporary/test" "$out"
 echo "Built $out"

@@ -50,6 +50,13 @@ void puf_step(Env* env);
 void puf_render(Env* env);
 void puf_close(Env* env);
 void puf_log(Log* log, Dict* out);
+// CPU environments using a stateless policy can opt into native time-limit
+// bootstrapping by defining PUF_HAS_TRUNCATION and providing this hook after Env:
+//   static const obs_t* puf_truncation_observation(Env*, const Agent*);
+// Return an OBS_SIZE pre-autoreset observation for a pure timeout, NULL otherwise.
+// Its storage must survive until the next step/reset. Set terminals=1 for either
+// termination or truncation, and clear the hook on explicit reset. Collection
+// currently requires synchronous execution and disabled CUDA graphs for this API.
 // Bot ladder writes this between rungs so one PuffeRL can eval a whole ladder.
 // Default no-op; envs with scripted opponents #define PUF_HAS_BOT_POLICY and
 // assign env->bot_policy.

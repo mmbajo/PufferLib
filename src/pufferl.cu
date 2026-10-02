@@ -433,8 +433,8 @@ struct VecEnv {
     float* rewards;
     float* terminals;
     unsigned char* action_mask;
-#ifdef PUFFER_DECISION_SNAKE
-    precision_t* final_observations; // Pinned pre-autoreset boards, in policy order.
+#ifdef PUF_HAS_TRUNCATION
+    precision_t* final_observations; // Pinned pre-autoreset observations, in policy order.
     unsigned char* truncations;
 #endif
     int* worker_state;
@@ -452,7 +452,7 @@ struct EnvBuf {
     Float rewards;    // (total_agents,)
     Float terminals;  // (total_agents,)
     Byte action_mask; // (total_agents, mask_size); always allocated
-#ifdef PUFFER_DECISION_SNAKE
+#ifdef PUF_HAS_TRUNCATION
     Prec final_observations; // (total_agents, OBS_SIZE), encoded like rollout obs
     Byte truncations;        // (total_agents,), time limit without true termination
 #endif
@@ -789,11 +789,11 @@ Float puf_slice(Float p, int t, int start, int count) {
     };
 }
 
-#ifdef PUFFER_DECISION_SNAKE
+#ifdef PUF_HAS_TRUNCATION
 // Reward[t] belongs to the action preceding observation[t]. A truncation must
-// retain done[t]=1 (do not connect episodes) while preserving V(final_board).
+// retain done[t]=1 (do not connect episodes) while preserving V(final_observation).
 // Clamp the environment reward before, never after, the bootstrap correction.
-static __global__ void decision_snake_bootstrap_reward(precision_t* rewards,
+static __global__ void puf_bootstrap_timeout_reward(precision_t* rewards,
         const unsigned char* truncated, Prec final_dec, float gamma) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= final_dec.shape[0]) return;
@@ -884,8 +884,8 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
                 slot_st, *st, sub, n);
         }
 
-#ifdef PUFFER_DECISION_SNAKE
-        // Time limits end GAE recursion but still bootstrap from the final board.
+#ifdef PUF_HAS_TRUNCATION
+        // Time limits end GAE recursion but bootstrap from the final observation.
         // The Transformer is stateless: this value-only forward can reuse its
         // workspace before the ordinary forward replaces all cached activations.
         Prec final_obs = {
@@ -893,7 +893,7 @@ static void pufferl_forward_step(PuffeRL* pufferl, int buf, int t,
             .shape = {n, OBS_SIZE},
         };
         Prec final_dec = arch_forward(&pol->arch, *w, *acts, final_obs, *st, stream);
-        decision_snake_bootstrap_reward<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
+        puf_bootstrap_timeout_reward<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
             rew_dst.data + off, env->truncations.data + sub, final_dec, hypers->gamma);
 #endif
         Prec dec = arch_forward(&pol->arch, *w, *acts, obs_b, *st, stream);
@@ -1068,7 +1068,7 @@ static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
         cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->action_mask, mask_bytes, cudaHostAllocPortable);
     memset(vec->action_mask, 1, mask_bytes);
-#ifdef PUFFER_DECISION_SNAKE
+#ifdef PUF_HAS_TRUNCATION
     cudaHostAlloc((void**)&vec->final_observations,
         (size_t)total_agents * OBS_SIZE * sizeof(precision_t), cudaHostAllocPortable);
     cudaHostAlloc((void**)&vec->truncations,
@@ -1147,22 +1147,22 @@ static void cpu_upload(PuffeRL* p, int start, int n, cudaStream_t stream) {
     cudaMemcpyAsync(e->action_mask.data + (size_t)start * mask,
         v->action_mask + (size_t)start * mask,
         n * mask * sizeof(unsigned char), cudaMemcpyHostToDevice, stream);
-#ifdef PUFFER_DECISION_SNAKE
+#ifdef PUF_HAS_TRUNCATION
     // Env instances may be reordered into policy slices. Derive physical rows
     // from their bound observation pointers instead of assuming env index==row.
     // Only read transition state belonging to this worker's range.
     for (int i = 0; i < v->size; ++i) {
         Env* instance = &v->envs[i];
-        assert(instance->num_agents == 1);
-        Agent* agent = &instance->agents[0];
-        long physical = (agent->observations - v->observations) / OBS_SIZE;
-        if (physical < start || physical >= (long)start + n) continue;
-        const DecisionSnakeTransition* transition = &instance->transition;
-        bool truncated = transition->valid && transition->truncated && !transition->terminated;
-        v->truncations[physical] = truncated;
-        const obs_t* final = truncated ? transition->observations : agent->observations;
-        for (int j = 0; j < OBS_SIZE; ++j)
-            v->final_observations[(size_t)physical * OBS_SIZE + j] = from_float((float)final[j]);
+        for (int a = 0; a < instance->num_agents; ++a) {
+            Agent* agent = &instance->agents[a];
+            long physical = (agent->observations - v->observations) / OBS_SIZE;
+            if (physical < start || physical >= (long)start + n) continue;
+            const obs_t* final = puf_truncation_observation(instance, agent);
+            v->truncations[physical] = final != NULL;
+            if (!final) final = agent->observations;
+            for (int j = 0; j < OBS_SIZE; ++j)
+                v->final_observations[(size_t)physical * OBS_SIZE + j] = from_float((float)final[j]);
+        }
     }
     cudaMemcpyAsync(e->final_observations.data + (size_t)start * OBS_SIZE,
         v->final_observations + (size_t)start * OBS_SIZE,
@@ -1550,7 +1550,7 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
     transpose_102<<<grid_size(T * B * mask_c), BLOCK_SIZE, 0, stream>>>(
         rollouts->action_mask.data, src.action_mask.data, T, B, mask_c);
 
-#ifndef PUFFER_DECISION_SNAKE
+#ifndef PUF_HAS_TRUNCATION
     clamp_precision_kernel<<<grid_size(
         numel(rollouts->rewards.shape)), BLOCK_SIZE, 0, stream>>>(
         rollouts->rewards.data, -1.0f, 1.0f, numel(rollouts->rewards.shape));
@@ -1846,8 +1846,8 @@ static void master_weights_setup(Float* mw, Prec* param,
 }
 
 PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
-#ifdef PUFFER_DECISION_LAYA
-    decision_laya_configure(ini);
+#ifdef PUFFER_DECISION_POLICY
+    decision_policy_configure(ini);
 #endif
     Hypers hypers = {
         .horizon = puf_ini_get(ini, "train", "horizon"),
@@ -1884,7 +1884,7 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .num_threads = puf_ini_get(ini, "vec", "num_threads"),
         .seed = puf_ini_get(ini, "base", "seed"),
     };
-#ifdef PUFFER_DECISION_SNAKE
+#if defined(PUF_HAS_TRUNCATION) || defined(PUFFER_DECISION_POLICY)
     if (hypers.async || hypers.cudagraphs) {
         fprintf(stderr, "%s currently requires base.async=0 and base.cudagraphs=-1\n", PUFFER_ENV_NAME);
         exit(1);
@@ -1957,7 +1957,7 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .action_mask = {.shape = {total_agents, act_n}},
     };
     EnvBuf* env = &pufferl->env;
-#ifdef PUFFER_DECISION_SNAKE
+#ifdef PUF_HAS_TRUNCATION
     env->final_observations = {.shape = {total_agents, OBS_SIZE}};
     env->truncations = {.shape = {total_agents}};
     cudaMalloc((void**)&env->final_observations.data,

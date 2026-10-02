@@ -7,16 +7,16 @@
 #include <iostream>
 
 static int validate(const unsigned char* observations) {
-    const auto& bundle = decision_laya_context->bundle;
+    const auto& bundle = decision_policy_context->bundle;
     int length = observations[0] | (observations[1] << 8);
     assert(length > 0 && length <= bundle.max_len);
-    assert(observations[10] == 0);
+    assert(observations[DECISION_POLICY_QTYPE_OFFSET] == 0);
     for (int k = 0; k < 4; ++k) {
         int marker = observations[2 + 2 * k] | (observations[3 + 2 * k] << 8);
         assert(marker < length);
         uint32_t token = 0;
         for (int byte = 0; byte < 4; ++byte)
-            token |= uint32_t(observations[16 + 4 * marker + byte]) << (8 * byte);
+            token |= uint32_t(observations[DECISION_POLICY_HEADER_BYTES + 4 * marker + byte]) << (8 * byte);
         assert(token == bundle.mask_id);
     }
     return length;
@@ -24,7 +24,7 @@ static int validate(const unsigned char* observations) {
 
 int main(int argc, char** argv) {
     if (argc != 2) { std::cerr << "usage: test_decision_laya_observation BUNDLE\n"; return 2; }
-    decision_laya_context.reset(new DecisionLayaContext(argv[1]));
+    decision_policy_context.reset(new DecisionPolicyContext(argv[1]));
     unsigned char observations[OBS_SIZE], expected[OBS_SIZE], masks[4];
     int32_t board[100]{};
     for (int fixture = 0; fixture < 3; ++fixture) {

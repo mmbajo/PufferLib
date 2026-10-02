@@ -6,6 +6,12 @@ the encoder, typed decision heads and gradients run in CUDA C++. Each training
 step observes the game, computes an action, then advances the environment.
 Python is used only for optional offline imports and reference tests.
 
+The policy adapter is shared with
+[`decision_cartpole`](../decision_cartpole/README.md), which uses two actions
+and the stock CartPole physics. The reusable interface accepts an environment's
+state text, instruction and fixed action descriptions; see that guide for adding
+another discrete-action environment without changing the Transformer backend.
+
 There are two import modes:
 
 | Source | Imported parameters | Newly initialized parameters |
@@ -228,7 +234,10 @@ The reference environment needs PyTorch, NumPy, Transformers, `safetensors`,
 skips when optional reference dependencies or snapshots are absent. Individual
 test executables can be built with `encoder`, `decision`, `bundle`, `input`,
 `tokenizer`, `observation` or `checkpoint` instead of `all`; an optional second
-argument selects the output file.
+argument selects the output file. `all` also builds the reusable adapter's
+CartPole, layout and Puffer integration harnesses, requiring the same native
+Raylib/OpenMP/NCCL dependencies as the trainer. Their individual targets and
+commands are in the [CartPole guide](../decision_cartpole/README.md#limits-and-validation).
 The tokenizer harness needs only the C++ compiler and tokenizer archive. The
 other harnesses need CUDA headers/toolchain to compile; CPU bundle, input,
 observation and checkpoint checks do not allocate GPU memory. The observation

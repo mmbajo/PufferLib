@@ -7,6 +7,8 @@ All of our documentation is hosted at [puffer.ai](https://puffer.ai "PufferLib D
 
 For native Transformer policies, see [benchmark Snake training](ocean/decision_snake/README.md)
 and [importing Laya/BERT/ModernBERT models and tokenizers](ocean/decision_laya/README.md).
+[CartPole and the reusable decision-policy adapter](ocean/decision_cartpole/README.md)
+show how to train the same pretrained models in another native environment.
 
 ## Star to puff up the project!
 
