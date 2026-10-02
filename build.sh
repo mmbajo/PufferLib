@@ -16,6 +16,7 @@ set -e
 #                                    # packs website 1M-cap policy + *_web.ini
 #                                    # copy build/web/ENV/* to ../docker/puffer.ai/docs/assets/ENV/
 #   ./build.sh breakout --profile    # Kernel profiling binary
+#   ./build.sh cartpole build/bench --benchmark # Steady-state native PPO benchmark
 #   ./build.sh constellation         # Sweep dashboard -> ./seethestars
 #   ./build.sh cache_data            # Sweep log cache -> ./cache_data
 #   ./build.sh trailer               # 5.0 trailer -> ./resources/trailer/trailer (also exports diagrams)
@@ -23,7 +24,7 @@ set -e
 # Env is compiled in. Run: ./puffer train|eval|match|sweep [--section.key=value ...]
 
 if [ -z "$1" ]; then
-    echo "Usage: ./build.sh ENV [OUT] [--cu] [--float] [--debug] [--cpu] [--web] [--profile]"
+    echo "Usage: ./build.sh ENV [OUT] [--cu] [--float] [--debug] [--cpu] [--web] [--profile] [--benchmark]"
     exit 1
 fi
 ENV=$1
@@ -35,6 +36,7 @@ if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
 fi
 
 USE_GPU_ENV=0
+BENCHMARK=0
 SNAKE_RAW=0
 while [ $# -gt 0 ]; do
     case $1 in
@@ -44,11 +46,49 @@ while [ $# -gt 0 ]; do
         --debug) DEBUG=1 ;;
         --web)   MODE=web ;;
         --profile) MODE=profile ;;
+        --benchmark) BENCHMARK=1 ;;
         --cpu)   MODE=cpu ;;
         *) echo "Error: unknown argument '$1'" && exit 1 ;;
     esac
     shift
 done
+
+if [ "$BENCHMARK" = "1" ] && [ "${MODE:-native}" != native ]; then
+    echo "Error: --benchmark requires the native CUDA build" >&2
+    exit 1
+fi
+
+# A text decision environment opts in by including the shared policy header.
+# New adapters then inherit the native tokenizer/CUDA build without a name list.
+USE_DECISION_POLICY=0
+if grep -Eq '^[[:space:]]*#[[:space:]]*include[[:space:]]*["<].*decision_policy[.]h[">]' \
+        "ocean/$ENV/$ENV.h" 2>/dev/null; then
+    USE_DECISION_POLICY=1
+fi
+if [ "$ENV" = "decision_snake" ] || [ "$USE_DECISION_POLICY" = "1" ]; then
+    # The Transformer backend currently uses FP32 activations and gradients.
+    PRECISION="-DPRECISION_FLOAT"
+    if [ "$USE_GPU_ENV" = "1" ]; then
+        echo "Error: $ENV uses a CPU environment with a CUDA policy; omit --cu" >&2
+        exit 1
+    fi
+    case "${MODE:-native}" in
+        cpu|web)
+            echo "Error: $ENV uses a CUDA Transformer; CPU/web policy evaluation is not supported" >&2
+            exit 1
+            ;;
+        profile)
+            echo "Error: the legacy kernel profiler does not support the $ENV Transformer" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+# Prefer the existing compiler choice, but do not require Clang on CUDA hosts.
+if [ -z "${CC:-}" ]; then
+    if command -v clang >/dev/null 2>&1; then CC=clang; else CC=gcc; fi
+fi
+C_COMPILER_VERSION=$($CC --version 2>/dev/null || true)
 
 if [ "$ENV" = "robot_arm" ]; then
     USE_GPU_ENV=1
@@ -83,9 +123,16 @@ PLATFORM="$(uname -s)"
 if [ "$PLATFORM" = "Linux" ]; then
     RAYLIB_NAME='raylib-5.5_linux_amd64'
     OMP_FLAGS=(-fopenmp)
-    OMP_LIB=-lomp5
+    case "$C_COMPILER_VERSION" in
+        *clang*) OMP_LIB=-lomp5 ;;
+        *) OMP_LIB=-lgomp ;;
+    esac
     SANITIZE_FLAGS=(-fsanitize=address,undefined,bounds,pointer-overflow -fno-omit-frame-pointer)
     STANDALONE_LDFLAGS=(-lGL)
+    if [ "$($CC -print-file-name=libGL.so)" = "libGL.so" ]; then
+        GL_RUNTIME=$(ldconfig -p 2>/dev/null | awk '/libGL\.so\.1 / {print $NF; exit}')
+        if [ -f "$GL_RUNTIME" ]; then STANDALONE_LDFLAGS=(-l:libGL.so.1); fi
+    fi
 else
     RAYLIB_NAME='raylib-5.5_macos'
     OMP_PREFIX="$(brew --prefix libomp)"
@@ -106,6 +153,10 @@ CLANG_WARN=(
     -Wno-incompatible-pointer-types-discards-qualifiers
     -Wno-error=array-parameter
 )
+case "$C_COMPILER_VERSION" in
+    *clang*) ;;
+    *) CLANG_WARN=(-Wall -Werror=incompatible-pointer-types -Werror=return-type) ;;
+esac
 
 download() {
     local name=$1 url=$2
@@ -129,6 +180,7 @@ RAYLIB_A="$RAYLIB_NAME/lib/libraylib.a"
 INCLUDES=(-I./$RAYLIB_NAME/include -I./src -I./vendor)
 LINK_ARCHIVES=("$RAYLIB_A")
 EXTRA_SRC=""
+EXTRA_OBJECTS=()
 EXTRA_LDFLAGS=()
 EXTRA_CFLAGS=()
 if [ -n "${NVCC_EXTRA:-}" ]; then
@@ -241,6 +293,36 @@ else
     LINK_OPT="-O2"
 fi
 # Dashboard / cache / trailer: compile SRC_FILE only (not puffercpu / CUDA / obs_t).
+if [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; then
+    mkdir -p build
+    $CC -std=c11 $LINK_OPT "${CLANG_WARN[@]}" -c ocean/decision_snake/engine/snake.c \
+        -o build/decision_snake_engine.o
+    EXTRA_OBJECTS+=(build/decision_snake_engine.o)
+fi
+case "$ENV" in
+    decision_connect4|decision_lightsout|decision_2048)
+        mkdir -p build
+        engine=${ENV#decision_}
+        if [ "$engine" = 2048 ]; then engine=g2048; fi
+        $CC -std=c11 $LINK_OPT "${CLANG_WARN[@]}" -c "ocean/$ENV/engine/$engine.c" \
+            -o "build/${ENV}_engine.o"
+        EXTRA_OBJECTS+=("build/${ENV}_engine.o")
+        ;;
+esac
+if [ "$USE_DECISION_POLICY" = "1" ]; then
+    mkdir -p build
+    TOKENIZER_ARCHIVE=${PUFFER_TOKENIZER_LIB:-build/libpuffer_tokenizer.a}
+    if [[ ! -f "$TOKENIZER_ARCHIVE" || tools/native_tokenizer/Cargo.toml -nt "$TOKENIZER_ARCHIVE" ||
+          tools/native_tokenizer/Cargo.lock -nt "$TOKENIZER_ARCHIVE" ||
+          tools/native_tokenizer/src/lib.rs -nt "$TOKENIZER_ARCHIVE" ]]; then
+        bash tools/build_native_tokenizer.sh "$TOKENIZER_ARCHIVE"
+    fi
+    $CC -std=c11 $LINK_OPT -c vendor/cJSON.c -o "build/${ENV}_cjson.o"
+    EXTRA_OBJECTS+=("build/${ENV}_cjson.o")
+    LINK_ARCHIVES+=("$TOKENIZER_ARCHIVE")
+    EXTRA_LDFLAGS+=(-ldl)
+fi
+
 if [ "$STANDALONE" = "1" ]; then
     if [ "$MODE" = "web" ] || [ "$MODE" = "profile" ]; then
         echo "Error: $ENV is a standalone app, not an env" >&2
@@ -298,7 +380,7 @@ if [ "$MODE" = "cpu" ]; then
     esac
     FLAGS=(
         -I. -Isrc -I$SRC_DIR -Ivendor "${INCLUDES[@]}"
-        "$STANDALONE_SOURCE" $EXTRA_SRC -o "$OUTPUT_NAME"
+        "$STANDALONE_SOURCE" $EXTRA_SRC "${EXTRA_OBJECTS[@]}" -o "$OUTPUT_NAME"
         "${LINK_ARCHIVES[@]}"
         "${EXTRA_LDFLAGS[@]}"
         "${STANDALONE_LDFLAGS[@]}"
@@ -369,7 +451,7 @@ elif [ "$MODE" = "web" ]; then
     fi
     emcc \
         -o "build/web/$ENV/game.html" \
-        src/puffercpu.c $EXTRA_SRC \
+        src/puffercpu.c $EXTRA_SRC "${EXTRA_OBJECTS[@]}" \
         -O3 -Wall -Wno-narrowing -Wno-unreachable-code \
         "${LINK_ARCHIVES[@]}" \
         -I. -Isrc -I$SRC_DIR -Ivendor "${INCLUDES[@]}" \
@@ -410,7 +492,7 @@ elif [ "$MODE" = "cpu" ]; then
         -DPUFFERCPU_EVAL_MAIN \
         -DENV_HEADER=\"$ENV_HEADER\" \
         -DPUFFER_ENV_NAME=\"$ENV\" \
-        -x c src/puffercpu.h -x none $EXTRA_SRC \
+        -x c src/puffercpu.c -x none $EXTRA_SRC "${EXTRA_OBJECTS[@]}" \
         "${LINK_ARCHIVES[@]}" \
         "${EXTRA_LDFLAGS[@]}" \
         "${STANDALONE_LDFLAGS[@]}" \
@@ -420,15 +502,46 @@ elif [ "$MODE" = "cpu" ]; then
     exit 0
 fi
 
-CUDA_HOME=${CUDA_HOME:-${CUDA_PATH:-$(dirname "$(dirname "$(which nvcc)")")}}
+CUDA_HOME=${CUDA_HOME:-${CUDA_PATH:-}}
+NVCC_BIN=${CUDACXX:-${CUDA_HOME:+$CUDA_HOME/bin/nvcc}}
+NVCC_BIN=${NVCC_BIN:-$(command -v nvcc || true)}
+NVCC_BIN=$(command -v "$NVCC_BIN" 2>/dev/null || true)
+if [ -z "$NVCC_BIN" ] || [ ! -x "$NVCC_BIN" ]; then
+    echo "Error: CUDA compiler not found; set CUDA_HOME or CUDACXX, or add nvcc to PATH" >&2
+    exit 1
+fi
+CUDA_HOME=${CUDA_HOME:-$(dirname "$(dirname "$NVCC_BIN")")}
+CUDA_HOME=$(cd "$CUDA_HOME" && pwd)
+CUDA_LIB_FLAGS=("-L$CUDA_HOME/lib64" -Xlinker -rpath -Xlinker "$CUDA_HOME/lib64")
+CUDA_RUNTIME_LIBS=()
+# cuSOLVER's CUDA 12 dependency must be direct for this binary's RUNPATH to
+# locate it; RUNPATH is not inherited by dependencies of shared libraries.
+if [ -f "$CUDA_HOME/lib64/libnvJitLink.so" ]; then
+    CUDA_RUNTIME_LIBS=(-Xlinker=--no-as-needed,-lnvJitLink,--as-needed)
+fi
+# NVHPC keeps cuBLAS/cuSOLVER/cuRAND in a sibling math_libs installation.
+for dir in "$CUDA_HOME/../math_libs" "$CUDA_HOME/../../math_libs/$(basename "$CUDA_HOME")"; do
+    if [ -f "$dir/include/cublas_v2.h" ]; then
+        dir=$(cd "$dir" && pwd)
+        INCLUDES+=("-I$dir/include")
+        CUDA_LIB_FLAGS+=("-L$dir/lib64" -Xlinker -rpath -Xlinker "$dir/lib64")
+        break
+    fi
+done
+# A CUDA development installation may provide only an NVML link stub on the
+# login/build host. Never add the stub directory to the runtime search path.
+if [ -f "$CUDA_HOME/lib64/stubs/libnvidia-ml.so" ]; then
+    CUDA_LIB_FLAGS+=("-L$CUDA_HOME/lib64/stubs")
+fi
 # NCCL include/lib fallback.
 # Needed when NCCL is provided by the nvidia-nccl-cu12 wheel in the active venv.
 NCCL_IFLAG=""
 NCCL_LFLAG=""
-for dir in /usr/include /usr/local/cuda/include; do
+NCCL_ROOTS=("${NCCL_HOME:-${NCCL_ROOT:-}}" "$CUDA_HOME/../comm_libs/nccl" "$CUDA_HOME/../../comm_libs/nccl")
+for dir in "${NCCL_INCLUDE_DIR:-}" "${NCCL_ROOTS[@]/%//include}" /usr/include "$CUDA_HOME/include"; do
     if [ -f "$dir/nccl.h" ]; then NCCL_IFLAG="-I$dir"; break; fi
 done
-for dir in /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64; do
+for dir in "${NCCL_LIB_DIR:-}" "${NCCL_ROOTS[@]/%//lib}" "${NCCL_ROOTS[@]/%//lib64}" /usr/lib/x86_64-linux-gnu "$CUDA_HOME/lib64"; do
     if [ -f "$dir/libnccl.so" ] || [ -f "$dir/libnccl.so.2" ]; then NCCL_LFLAG="-L$dir"; break; fi
 done
 if [ -z "$NCCL_IFLAG" ]; then
@@ -437,13 +550,26 @@ fi
 if [ -z "$NCCL_LFLAG" ]; then
     NCCL_LFLAG=$(python -c "import nvidia.nccl, os; print('-L' + os.path.join(nvidia.nccl.__path__[0], 'lib'))" 2>/dev/null || echo "")
 fi
+if [ -n "$NCCL_LFLAG" ]; then
+    NCCL_RUNTIME=${NCCL_LFLAG#-L}
+    EXTRA_LDFLAGS+=(-Xlinker -rpath -Xlinker "$NCCL_RUNTIME")
+fi
 
 export CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
 export CCACHE_BASEDIR="$(pwd)"
 export CCACHE_COMPILERCHECK=content
-NVCC="ccache $CUDA_HOME/bin/nvcc"
-CC="${CC:-$(command -v ccache >/dev/null && echo 'ccache clang' || echo 'clang')}"
+NVCC=("$NVCC_BIN")
+if command -v ccache >/dev/null 2>&1; then NVCC=(ccache "${NVCC[@]}"); fi
 ARCH=${NVCC_ARCH:-native}
+ARCH_FLAGS=(-arch="$ARCH")
+if { [ "$ENV" = "decision_snake" ] || [ "$USE_DECISION_POLICY" = "1" ]; } && [ -z "${NVCC_ARCH:-}" ]; then
+    # Native cubins avoid a PTX JIT dependency on the GPU host's driver version.
+    # Keep Ampere PTX for future GPUs, and include Hopper cubins when supported.
+    ARCH_FLAGS=('-gencode=arch=compute_80,code=[sm_80,compute_80]')
+    case "$("$NVCC_BIN" --list-gpu-code)" in
+        *sm_90*) ARCH_FLAGS+=('-gencode=arch=compute_90,code=sm_90') ;;
+    esac
+fi
 
 # CPU and CUDA envs are separate sources. --cu selects the .cu; default is .h.
 # Only one is compiled in (never both).
@@ -457,7 +583,7 @@ else
     ENV_HEADER="$SRC_DIR/$ENV.h"
 fi
 mkdir -p build
-if ! grep -q 'typedef[[:space:]].*obs_t' "$ENV_HEADER" 2>/dev/null; then
+if [ "$USE_DECISION_POLICY" != "1" ] && ! grep -q 'typedef[[:space:]].*obs_t' "$ENV_HEADER" 2>/dev/null; then
     echo "Error: $ENV_HEADER must typedef obs_t"
     exit 1
 fi
@@ -502,8 +628,10 @@ if [ "$MODE" = "native" ]; then
                 -o "$OSRS_RENDER_OBJECT"
             ;;
     esac
+    TRAIN_SOURCE=src/pufferl.cu
+    if [ "$BENCHMARK" = 1 ]; then TRAIN_SOURCE=tools/benchmark_native.cu; fi
     echo "Compiling $ENV_HEADER -> $TRAIN_BIN..."
-    $NVCC $NVCC_OPT -arch=$ARCH -std=c++17 \
+    "${NVCC[@]}" $NVCC_OPT "${ARCH_FLAGS[@]}" -std=c++17 \
         -I. -Isrc -I$SRC_DIR -Ivendor \
         "${INCLUDES[@]}" \
         -I$CUDA_HOME/include -I$CUDA_HOME/include/cccl $NCCL_IFLAG -I$RAYLIB_NAME/include \
@@ -516,13 +644,15 @@ if [ "$MODE" = "native" ]; then
 	    "${NVCC_NARROW[@]}" \
 	    "${EXTRA_CFLAGS[@]}" \
 	    $PRECISION \
-	    src/pufferl.cu \
+	    "$TRAIN_SOURCE" \
         $EXTRA_SRC \
+        "${EXTRA_OBJECTS[@]}" \
         $OSRS_RENDER_OBJECT \
         "${LINK_ARCHIVES[@]}" \
-        -L$CUDA_HOME/lib64 $NCCL_LFLAG \
+        "${CUDA_LIB_FLAGS[@]}" $NCCL_LFLAG \
         "${EXTRA_LDFLAGS[@]}" \
         -lcudart -lnccl -lnvidia-ml -lcublas -lcusolver -lcurand \
+        "${CUDA_RUNTIME_LIBS[@]}" \
         -lm -Xlinker=-lpthread $OMP_LIB "${STANDALONE_LDFLAGS[@]}" \
         -o "$TRAIN_BIN"
     echo "Built: ./$TRAIN_BIN"
@@ -530,7 +660,7 @@ if [ "$MODE" = "native" ]; then
 elif [ "$MODE" = "profile" ]; then
     PROFILE_BIN="build/profile_${ENV}"
     echo "Compiling $ENV_HEADER -> $PROFILE_BIN..."
-    $NVCC $NVCC_OPT -arch=$ARCH -std=c++17 \
+    "${NVCC[@]}" $NVCC_OPT "${ARCH_FLAGS[@]}" -std=c++17 \
         -I. -Isrc -I$SRC_DIR -Ivendor \
         "${INCLUDES[@]}" \
         -I$CUDA_HOME/include -I$CUDA_HOME/include/cccl $NCCL_IFLAG -I$RAYLIB_NAME/include \
@@ -543,10 +673,12 @@ elif [ "$MODE" = "profile" ]; then
         $PRECISION \
         -Xcompiler=-fopenmp \
         tests/profile_kernels.cu \
+        "${EXTRA_OBJECTS[@]}" \
         "$RAYLIB_A" \
-        -L$CUDA_HOME/lib64 \
+        "${CUDA_LIB_FLAGS[@]}" $NCCL_LFLAG "${EXTRA_LDFLAGS[@]}" \
         -lnccl -lnvidia-ml -lcublas -lcusolver -lcurand \
-        -lGL -lm -Xlinker=-lpthread $OMP_LIB \
+        "${CUDA_RUNTIME_LIBS[@]}" \
+        "${STANDALONE_LDFLAGS[@]}" -lm -Xlinker=-lpthread $OMP_LIB \
         -o "$PROFILE_BIN"
     echo "Built: ./$PROFILE_BIN"
 fi

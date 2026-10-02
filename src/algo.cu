@@ -30,6 +30,7 @@ struct Encoder {
     create_weights_fn create_weights;
     int in_dim, out_dim;
     size_t activation_size;  // sizeof(EncoderActivations) or custom override
+    int num_layers; // Available to encoders with a stack of attention blocks.
 };
 
 struct EncoderWeights {
@@ -993,6 +994,7 @@ Arch build_arch(int input_size, int hidden_size,
         .create_weights = encoder_create_weights,
         .in_dim = input_size, .out_dim = hidden_size,
         .activation_size = sizeof(EncoderActivations),
+        .num_layers = num_layers,
     };
     create_custom_encoder(&encoder);
     Decoder decoder = {
@@ -1022,6 +1024,7 @@ Arch build_arch(int input_size, int hidden_size,
         .num_layers = num_layers,
         .horizon = horizon,
     };
+    create_custom_network(&network);
     return Arch{
         .encoder = encoder, .decoder = decoder, .network = network,
     };
