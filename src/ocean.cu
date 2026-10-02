@@ -51,13 +51,17 @@ __device__ static const float OSRS_ITEM_OBS_TABLE_DEV
 #ifdef PUFFER_CRAFTAX
 #include "../ocean/craftax/craftax.cu"
 #endif
-#ifdef PUFFER_DECISION_SNAKE
+#if defined(PUFFER_DECISION_LAYA)
+#include "../ocean/decision_laya/decision_laya.cu"
+#elif defined(PUFFER_DECISION_SNAKE)
 #include "../ocean/decision_snake/decision_snake.cu"
 #endif
 
 // Override encoder vtable when this env has a custom net. No-op otherwise.
 static void create_custom_encoder(Encoder* enc) {
-#ifdef PUFFER_DECISION_SNAKE
+#if defined(PUFFER_DECISION_LAYA)
+    create_decision_laya_encoder(enc);
+#elif defined(PUFFER_DECISION_SNAKE)
     create_decision_snake_encoder(enc);
 #elif defined(PUFFER_NETHACK)
     create_nethack_encoder(enc);

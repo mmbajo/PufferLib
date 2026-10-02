@@ -5,6 +5,9 @@ PufferLib is a fast and sane reinforcement learning library that can train tiny,
 
 All of our documentation is hosted at [puffer.ai](https://puffer.ai "PufferLib Documentation"). @jsuarez5341 on [Discord](https://discord.gg/puffer) for support. Post there before opening issues. We're always looking for new contributors!
 
+For native Transformer policies, see [benchmark Snake training](ocean/decision_snake/README.md)
+and [importing Laya/BERT/ModernBERT models and tokenizers](ocean/decision_laya/README.md).
+
 ## Star to puff up the project!
 
 <a href="https://star-history.com/#pufferai/pufferlib&Date">

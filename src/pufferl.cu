@@ -1846,6 +1846,9 @@ static void master_weights_setup(Float* mw, Prec* param,
 }
 
 PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
+#ifdef PUFFER_DECISION_LAYA
+    decision_laya_configure(ini);
+#endif
     Hypers hypers = {
         .horizon = puf_ini_get(ini, "train", "horizon"),
         .total_agents = puf_ini_get(ini, "vec", "total_agents"),
@@ -1883,7 +1886,7 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     };
 #ifdef PUFFER_DECISION_SNAKE
     if (hypers.async || hypers.cudagraphs) {
-        fprintf(stderr, "decision_snake currently requires base.async=0 and base.cudagraphs=-1\n");
+        fprintf(stderr, "%s currently requires base.async=0 and base.cudagraphs=-1\n", PUFFER_ENV_NAME);
         exit(1);
     }
 #endif

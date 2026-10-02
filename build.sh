@@ -50,20 +50,20 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "$ENV" = "decision_snake" ]; then
+if [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; then
     # The Transformer backend currently uses FP32 activations and gradients.
     PRECISION="-DPRECISION_FLOAT"
     if [ "$USE_GPU_ENV" = "1" ]; then
-        echo "Error: decision_snake uses a C environment with a CUDA policy; omit --cu" >&2
+        echo "Error: $ENV uses a CPU environment with a CUDA policy; omit --cu" >&2
         exit 1
     fi
     case "${MODE:-native}" in
         cpu|web)
-            echo "Error: decision_snake uses a CUDA Transformer; CPU/web policy evaluation is not supported" >&2
+            echo "Error: $ENV uses a CUDA Transformer; CPU/web policy evaluation is not supported" >&2
             exit 1
             ;;
         profile)
-            echo "Error: the legacy kernel profiler does not support the decision_snake Transformer" >&2
+            echo "Error: the legacy kernel profiler does not support the $ENV Transformer" >&2
             exit 1
             ;;
     esac
@@ -278,11 +278,24 @@ else
     LINK_OPT="-O2"
 fi
 # Dashboard / cache / trailer: compile SRC_FILE only (not puffercpu / CUDA / obs_t).
-if [ "$ENV" = "decision_snake" ]; then
+if [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; then
     mkdir -p build
     $CC -std=c11 $LINK_OPT "${CLANG_WARN[@]}" -c ocean/decision_snake/engine/snake.c \
         -o build/decision_snake_engine.o
     EXTRA_OBJECTS+=(build/decision_snake_engine.o)
+fi
+if [ "$ENV" = "decision_laya" ]; then
+    TOKENIZER_ARCHIVE=${PUFFER_TOKENIZER_LIB:-build/libpuffer_tokenizer.a}
+    if [[ ! -f "$TOKENIZER_ARCHIVE" || tools/native_tokenizer/Cargo.toml -nt "$TOKENIZER_ARCHIVE" ||
+          tools/native_tokenizer/Cargo.lock -nt "$TOKENIZER_ARCHIVE" ||
+          tools/native_tokenizer/src/lib.rs -nt "$TOKENIZER_ARCHIVE" ]]; then
+        bash tools/build_native_tokenizer.sh "$TOKENIZER_ARCHIVE"
+    fi
+    $CC -std=c11 $LINK_OPT -c vendor/cJSON.c -o build/decision_laya_cjson.o
+    EXTRA_OBJECTS+=(build/decision_laya_cjson.o)
+    LINK_ARCHIVES+=("$TOKENIZER_ARCHIVE")
+    EXTRA_LDFLAGS+=(-ldl)
+    EXTRA_CFLAGS+=(-DPUFFER_DECISION_SNAKE)
 fi
 
 if [ "$STANDALONE" = "1" ]; then
@@ -524,7 +537,7 @@ NVCC=("$NVCC_BIN")
 if command -v ccache >/dev/null 2>&1; then NVCC=(ccache "${NVCC[@]}"); fi
 ARCH=${NVCC_ARCH:-native}
 ARCH_FLAGS=(-arch="$ARCH")
-if [ "$ENV" = "decision_snake" ] && [ -z "${NVCC_ARCH:-}" ]; then
+if { [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; } && [ -z "${NVCC_ARCH:-}" ]; then
     # Native cubins avoid a PTX JIT dependency on the GPU host's driver version.
     # Keep Ampere PTX for future GPUs, and include Hopper cubins when supported.
     ARCH_FLAGS=('-gencode=arch=compute_80,code=[sm_80,compute_80]')

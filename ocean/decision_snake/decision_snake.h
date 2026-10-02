@@ -12,7 +12,9 @@ typedef unsigned char obs_t;
 #include "engine/snake.h"
 
 #define ACT_SIZES {IB_SNAKE_ACTIONS}
+#ifndef OBS_SIZE
 #define OBS_SIZE IB_SNAKE_CELLS
+#endif
 #define NUM_ATNS 1
 #define PUF_STEPS_PER_SEC 10
 // The core's single terminal buffer cannot represent timeout bootstrapping.
@@ -65,9 +67,13 @@ static void decision_snake_observe(Env* env, obs_t* observations,
         unsigned char* action_mask) {
     int32_t board[IB_SNAKE_CELLS];
     ib_snake_observe(env->snake, board, IB_SNAKE_CELLS);
-    for (int i = 0; i < OBS_SIZE; i++) {
+#ifdef DECISION_SNAKE_ENCODE_OBSERVATION
+    DECISION_SNAKE_ENCODE_OBSERVATION(env, board, observations);
+#else
+    for (int i = 0; i < IB_SNAKE_CELLS; i++) {
         observations[i] = (obs_t)(board[i] + 1);
     }
+#endif
     uint32_t mask = ib_snake_legal_actions(env->snake);
     for (int i = 0; i < IB_SNAKE_ACTIONS; i++) {
         action_mask[i] = (unsigned char)((mask >> i) & 1);
