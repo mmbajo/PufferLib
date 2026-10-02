@@ -10,7 +10,9 @@
 #include <string.h>
 
 #include "ini.h"
+#ifndef PUF_HEADLESS
 #include "raylib.h"
+#endif
 #ifdef PLATFORM_WEB
 void puf_web_vsync(void);
 #else
