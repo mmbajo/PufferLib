@@ -6,12 +6,12 @@ kind="${1:-all}"
 case "$kind" in
     all)
         if [[ $# -gt 1 ]]; then echo "all does not accept an output path" >&2; exit 2; fi
-        for target in tokenizer encoder decision bundle input observation checkpoint cartpole-stock cartpole-env layout-2 layout-4 layout-8 policy-cartpole policy-laya; do "$0" "$target"; done
+        for target in tokenizer encoder decision bundle input observation checkpoint cartpole-stock cartpole-env lightsout-env layout-2 layout-4 layout-8 layout-25 policy-cartpole policy-laya policy-connect4 policy-lightsout policy-2048; do "$0" "$target"; done
         exit 0 ;;
-    policy-cartpole|policy-laya)
+    policy-cartpole|policy-laya|policy-connect4|policy-lightsout|policy-2048)
         exec "$root/tests/build_decision_tests.sh" "$@" ;;
-    encoder|decision|bundle|input|tokenizer|observation|checkpoint|cartpole-stock|cartpole-env|layout-2|layout-4|layout-8) ;;
-    *) echo "Usage: $0 [all|encoder|decision|bundle|input|tokenizer|observation|checkpoint|cartpole-stock|cartpole-env|layout-{2,4,8}|policy-cartpole|policy-laya] [OUT]" >&2; exit 2 ;;
+    encoder|decision|bundle|input|tokenizer|observation|checkpoint|cartpole-stock|cartpole-env|lightsout-env|layout-2|layout-4|layout-8|layout-25) ;;
+    *) echo "Usage: $0 [all|encoder|decision|bundle|input|tokenizer|observation|checkpoint|cartpole-stock|cartpole-env|lightsout-env|layout-{2,4,8,25}|policy-{cartpole,laya,connect4,lightsout,2048}] [OUT]" >&2; exit 2 ;;
 esac
 case "$kind" in
     tokenizer) name=test_native_tokenizer ;;
@@ -19,6 +19,7 @@ case "$kind" in
     checkpoint) name=test_laya_checkpoint ;;
     cartpole-stock) name=test_decision_cartpole_stock ;;
     cartpole-env) name=test_decision_cartpole_env ;;
+    lightsout-env) name=test_decision_lightsout_env ;;
     layout-*) name="test_decision_policy_layout_${kind#layout-}" ;;
     *) name="test_pretrained_$kind" ;;
 esac
@@ -44,7 +45,7 @@ objects=()
 libraries=(-lm -ldl -lpthread)
 needs_bundle=0
 case "$kind" in
-    bundle|input|observation|checkpoint|cartpole-env|layout-*) needs_bundle=1 ;;
+    bundle|input|observation|checkpoint|cartpole-env|lightsout-env|layout-*) needs_bundle=1 ;;
 esac
 if [[ "$kind" == tokenizer || "$needs_bundle" == 1 ]]; then
     archive="$root/build/libpuffer_tokenizer.a"
@@ -87,6 +88,10 @@ else
     if [[ "$kind" == observation ]]; then
         "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_snake/engine/snake.c" -o "$temporary/snake.o"
         objects+=("$temporary/snake.o")
+    fi
+    if [[ "$kind" == lightsout-env ]]; then
+        "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_lightsout/engine/lightsout.c" -o "$temporary/lightsout.o"
+        objects+=("$temporary/lightsout.o")
     fi
     "$nvcc" "${flags[@]}" "$source" \
         "${objects[@]}" -lcublas -lcudart "${libraries[@]}" -o "$temporary/test"

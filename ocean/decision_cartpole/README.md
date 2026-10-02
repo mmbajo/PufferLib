@@ -116,7 +116,10 @@ preserved, so its existing weights remain loadable with the same bundle.
 
 This adapter supports one discrete head with 2–255 fixed action slots, subject
 to the model's sequence budget. Two-action CartPole and four-action Snake have
-end-to-end integration coverage; the numeric upper bound does not guarantee
+end-to-end integration coverage, alongside seven-action
+[Connect Four](../decision_connect4/README.md), 25-action
+[Lights Out](../decision_lightsout/README.md), and four-action
+[2048](../decision_2048/README.md). The numeric upper bound does not guarantee
 that 255 descriptions fit a particular bundle. Continuous actions and multiple
 independent action heads require additional policy interfaces.
 
@@ -125,6 +128,9 @@ limited to 2048 tokens, model width must be divisible by four, and attention use
 quadratic workspace. Model support remains BERT/ModernBERT including full Laya.
 PPO trains the option policy and added critic, without an act/escalate loss.
 The bundle's calibration is not refitted by PPO.
+The [native benchmark](../../tools/benchmark_native.md) measures actual rollout
+and learner throughput without checkpoint I/O; short train commands include
+checkpoint saving and should not be used as steady-state speed measurements.
 
 Keep the original matching bundle with every flat Puffer checkpoint, and record
 the environment/configuration that produced it. Flat files contain weights,

@@ -9,6 +9,10 @@ For native Transformer policies, see [benchmark Snake training](ocean/decision_s
 and [importing Laya/BERT/ModernBERT models and tokenizers](ocean/decision_laya/README.md).
 [CartPole and the reusable decision-policy adapter](ocean/decision_cartpole/README.md)
 show how to train the same pretrained models in another native environment.
+Additional text decision environments are [Connect Four](ocean/decision_connect4/README.md),
+[Lights Out](ocean/decision_lightsout/README.md) and [2048](ocean/decision_2048/README.md).
+Use the [native training benchmark](tools/benchmark_native.md) to measure rollout
+and learner throughput separately from startup, evaluation and checkpoint I/O.
 
 ## Star to puff up the project!
 

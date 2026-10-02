@@ -1,5 +1,5 @@
-// Compile this same integration test for both decision_cartpole (two actions)
-// and decision_laya (four actions). It exercises the actual native collector,
+// Compile this integration test for each native text decision environment.
+// It exercises the actual native collector,
 // shared model parameters, decoder, PPO update, and checkpoint API.
 #include "../src/pufferl.cu"
 
@@ -191,9 +191,24 @@ static int safe_fixture_action(Env* env) {
             return k;
     }
     throw std::runtime_error("fixture board has no safe timeout action");
+#elif defined(PUFFER_DECISION_LIGHTSOUT)
+    int32_t board[IB_LIGHTSOUT_CELLS];
+    require(ib_lightsout_observe(env->lightsout, board, IB_LIGHTSOUT_CELLS) == 0,
+            "cannot read Lights Out timeout fixture");
+    for (int action = 0; action < DECISION_ACTIONS; ++action) {
+        bool solves = true;
+        for (int cell = 0; cell < IB_LIGHTSOUT_CELLS; ++cell) {
+            bool toggles = std::abs(cell / 5 - action / 5) +
+                           std::abs(cell % 5 - action % 5) <= 1;
+            if (board[cell] != int(toggles)) solves = false;
+        }
+        if (!solves) return action;
+    }
+    throw std::runtime_error("Lights Out fixture has no non-solving action");
 #else
-    (void)env;
-    return 0;
+    for (int action = 0; action < DECISION_ACTIONS; ++action)
+        if (env->agents[0].action_mask[action]) return action;
+    throw std::runtime_error("fixture has no legal action");
 #endif
 }
 

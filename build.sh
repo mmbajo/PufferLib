@@ -16,6 +16,7 @@ set -e
 #                                    # packs website 1M-cap policy + *_web.ini
 #                                    # copy build/web/ENV/* to ../docker/puffer.ai/docs/assets/ENV/
 #   ./build.sh breakout --profile    # Kernel profiling binary
+#   ./build.sh cartpole build/bench --benchmark # Steady-state native PPO benchmark
 #   ./build.sh constellation         # Sweep dashboard -> ./seethestars
 #   ./build.sh cache_data            # Sweep log cache -> ./cache_data
 #   ./build.sh trailer               # 5.0 trailer -> ./resources/trailer/trailer (also exports diagrams)
@@ -23,7 +24,7 @@ set -e
 # Env is compiled in. Run: ./puffer train|eval|match|sweep [--section.key=value ...]
 
 if [ -z "$1" ]; then
-    echo "Usage: ./build.sh ENV [OUT] [--cu] [--float] [--debug] [--cpu] [--web] [--profile]"
+    echo "Usage: ./build.sh ENV [OUT] [--cu] [--float] [--debug] [--cpu] [--web] [--profile] [--benchmark]"
     exit 1
 fi
 ENV=$1
@@ -35,6 +36,7 @@ if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
 fi
 
 USE_GPU_ENV=0
+BENCHMARK=0
 SNAKE_RAW=0
 while [ $# -gt 0 ]; do
     case $1 in
@@ -44,11 +46,17 @@ while [ $# -gt 0 ]; do
         --debug) DEBUG=1 ;;
         --web)   MODE=web ;;
         --profile) MODE=profile ;;
+        --benchmark) BENCHMARK=1 ;;
         --cpu)   MODE=cpu ;;
         *) echo "Error: unknown argument '$1'" && exit 1 ;;
     esac
     shift
 done
+
+if [ "$BENCHMARK" = "1" ] && [ "${MODE:-native}" != native ]; then
+    echo "Error: --benchmark requires the native CUDA build" >&2
+    exit 1
+fi
 
 # A text decision environment opts in by including the shared policy header.
 # New adapters then inherit the native tokenizer/CUDA build without a name list.
@@ -291,6 +299,16 @@ if [ "$ENV" = "decision_snake" ] || [ "$ENV" = "decision_laya" ]; then
         -o build/decision_snake_engine.o
     EXTRA_OBJECTS+=(build/decision_snake_engine.o)
 fi
+case "$ENV" in
+    decision_connect4|decision_lightsout|decision_2048)
+        mkdir -p build
+        engine=${ENV#decision_}
+        if [ "$engine" = 2048 ]; then engine=g2048; fi
+        $CC -std=c11 $LINK_OPT "${CLANG_WARN[@]}" -c "ocean/$ENV/engine/$engine.c" \
+            -o "build/${ENV}_engine.o"
+        EXTRA_OBJECTS+=("build/${ENV}_engine.o")
+        ;;
+esac
 if [ "$USE_DECISION_POLICY" = "1" ]; then
     mkdir -p build
     TOKENIZER_ARCHIVE=${PUFFER_TOKENIZER_LIB:-build/libpuffer_tokenizer.a}
@@ -610,6 +628,8 @@ if [ "$MODE" = "native" ]; then
                 -o "$OSRS_RENDER_OBJECT"
             ;;
     esac
+    TRAIN_SOURCE=src/pufferl.cu
+    if [ "$BENCHMARK" = 1 ]; then TRAIN_SOURCE=tools/benchmark_native.cu; fi
     echo "Compiling $ENV_HEADER -> $TRAIN_BIN..."
     "${NVCC[@]}" $NVCC_OPT "${ARCH_FLAGS[@]}" -std=c++17 \
         -I. -Isrc -I$SRC_DIR -Ivendor \
@@ -624,7 +644,7 @@ if [ "$MODE" = "native" ]; then
 	    "${NVCC_NARROW[@]}" \
 	    "${EXTRA_CFLAGS[@]}" \
 	    $PRECISION \
-	    src/pufferl.cu \
+	    "$TRAIN_SOURCE" \
         $EXTRA_SRC \
         "${EXTRA_OBJECTS[@]}" \
         $OSRS_RENDER_OBJECT \

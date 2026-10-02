@@ -1,5 +1,5 @@
 // CPU-only packed observation checks. Compile separately with DECISION_ACTIONS
-// set to 2, 4 and 8; the last case extends the original 16-byte header.
+// set to 2, 4, 8 and 25; the larger cases extend the original 16-byte header.
 #ifndef DECISION_ACTIONS
 #define DECISION_ACTIONS 8
 #endif

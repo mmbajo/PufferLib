@@ -5,8 +5,8 @@ set -euo pipefail
 
 kind="${1:-puffer}"
 case "$kind" in
-    puffer|transformer|policy-cartpole|policy-laya) ;;
-    *) echo "Usage: $0 [puffer|transformer|policy-cartpole|policy-laya] [OUT]" >&2; exit 2 ;;
+    puffer|transformer|policy-cartpole|policy-laya|policy-connect4|policy-lightsout|policy-2048) ;;
+    *) echo "Usage: $0 [puffer|transformer|policy-{cartpole,laya,connect4,lightsout,2048}] [OUT]" >&2; exit 2 ;;
 esac
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 name="test_decision_${kind//-/_}"
@@ -16,6 +16,8 @@ env=decision_snake
 case "$kind" in
     policy-cartpole) env=decision_cartpole; source="$root/tests/test_decision_policy.cu" ;;
     policy-laya) env=decision_laya; source="$root/tests/test_decision_policy.cu" ;;
+    policy-connect4|policy-lightsout|policy-2048)
+        env="decision_${kind#policy-}"; source="$root/tests/test_decision_policy.cu" ;;
 esac
 cuda="${CUDA_HOME:-${CUDA_PATH:-}}"
 nvcc="${CUDACXX:-${cuda:+$cuda/bin/nvcc}}"
@@ -84,10 +86,16 @@ if [[ "$kind" != transformer ]]; then
     else
         libraries+=(-lGL)
     fi
-    if [[ "$env" != decision_cartpole ]]; then
-        "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_snake/engine/snake.c" \
-            -o "$temporary/snake.o"
-        objects+=("$temporary/snake.o")
+    engine_source=""
+    case "$env" in
+        decision_snake|decision_laya) engine_source="ocean/decision_snake/engine/snake.c" ;;
+        decision_connect4) engine_source="ocean/$env/engine/connect4.c" ;;
+        decision_lightsout) engine_source="ocean/$env/engine/lightsout.c" ;;
+        decision_2048) engine_source="ocean/$env/engine/g2048.c" ;;
+    esac
+    if [[ -n "$engine_source" ]]; then
+        "${CC:-cc}" -std=c11 -O2 -c "$root/$engine_source" -o "$temporary/engine.o"
+        objects+=("$temporary/engine.o")
     fi
     if [[ "$kind" == policy-* ]]; then
         archive="$root/build/libpuffer_tokenizer.a"
