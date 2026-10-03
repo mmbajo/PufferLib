@@ -36,6 +36,7 @@
 
 // Project
 #include "ini.h"
+#include "native_checkpoint_io.h"
 
 #ifdef PRECISION_FLOAT
 typedef float precision_t;
@@ -1882,14 +1883,20 @@ void puf_save_weights(PuffeRL* p, const char* path) {
 void puf_load_weights_into(Float dst, Prec params,
         cudaStream_t stream, const char* path) {
     int64_t nbytes = numel(dst.shape) * sizeof(float);
+    struct stat info{};
+    puf_checkpoint::require(stat(path, &info) == 0 && S_ISREG(info.st_mode) &&
+        info.st_size == nbytes, "weight file must have the exact model size");
     FILE* fp = fopen(path, "rb");
-    assert(fp && "failed to open weights for reading");
-    char* buf = (char*)malloc(nbytes);
-    size_t nread = fread(buf, 1, nbytes, fp);
+    puf_checkpoint::require(fp != nullptr, "failed to open weights for reading");
+    std::vector<float> buf(numel(dst.shape));
+    size_t nread = fread(buf.data(), 1, nbytes, fp);
+    bool complete = (int64_t)nread == nbytes && fgetc(fp) == EOF && !ferror(fp);
     fclose(fp);
-    assert((int64_t)nread == nbytes && "failed to read weights");
-    cudaMemcpy(dst.data, buf, nbytes, cudaMemcpyHostToDevice);
-    free(buf);
+    puf_checkpoint::require(complete, "failed to read exact weight file");
+    for (float value : buf)
+        if (!std::isfinite(value)) puf_checkpoint::require(false, "nonfinite model weights");
+    puf_checkpoint::require(cudaMemcpy(dst.data, buf.data(), nbytes,
+        cudaMemcpyHostToDevice) == cudaSuccess, "failed to upload weights");
     if (USE_BF16) {
         int64_t n = numel(params.shape);
         cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(params.data, dst.data, n);
@@ -1902,8 +1909,12 @@ void pufferl_load_policy(PuffeRL* pufferl, int i, const char* path) {
     Policy* pol = &pufferl->policies[i];
     puf_load_weights_into(pol->master_weights, pol->param,
         pufferl->default_stream, path);
+    if (i == 0 && pufferl->hypers.async)
+        puf_copy(&pufferl->actor_param, &pol->param, pufferl->default_stream);
     cudaDeviceSynchronize();
 }
+
+#include "native_checkpoint.cuh"
 
 // fp32 master weights: alias param buffer in float mode; separate fp32 copy in bf16.
 // cast_now: copy param→master now (primary after init). Frozen policies load later.
@@ -3171,7 +3182,24 @@ EvalResult run_eval(Ini* ini, TrainContext* ctx, int mode, int verbose,
 }
 
 TrainResult run_train(Ini* ini, TrainContext* ctx) {
+    const char* resume_path = puf_ini_get_str(ini, "base", "resume_path");
+    bool resume = resume_path && *resume_path && strcmp(resume_path, "None") != 0;
+    bool save_state = puf_checkpoint::integer_option(ini, "save_training_state", 1) != 0;
+    long stop_after = puf_checkpoint::integer_option(ini, "stop_after_steps", 9007199254740991L);
+    char warm_start_buf[2048];
+    const char* warm_start = puf_checkpoint_path_key(ini, "load_model_path",
+        warm_start_buf, sizeof(warm_start_buf));
+    puf_checkpoint::require(!(resume && warm_start),
+        "resume_path and load_model_path are mutually exclusive");
+    long planned_steps = puf_ini_get(ini, "train", "total_timesteps");
+    long global_batch = (long)puf_ini_get(ini, "vec", "total_agents") *
+        (long)puf_ini_get(ini, "train", "horizon") * ctx->world_size;
+    puf_checkpoint::require(global_batch > 0 && (!stop_after ||
+        (save_state && stop_after <= planned_steps && stop_after % global_batch == 0)),
+        "stop_after_steps requires save_training_state=1 and an aligned step within total_timesteps");
     int use_selfplay = puf_ini_get(ini, "selfplay", "enabled");
+    puf_checkpoint::require(!(use_selfplay && (resume || save_state)),
+        "full training checkpoints do not support selfplay");
     if (!use_selfplay) {
         puf_ini_put(ini, "vec.num_policies", "1");
         puf_ini_put(ini, "vec.hist_policy_percent", "0");
@@ -3213,6 +3241,9 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     }
 
     PuffeRL* pufferl = create_pufferl(ini, ctx);
+    if (save_state || resume) puf_checkpoint::supported(pufferl);
+    if (resume) puf_checkpoint::load(pufferl, ini, resume_path);
+    if (warm_start) pufferl_load_policy(pufferl, 0, warm_start);
     Selfplay selfplay = {0};
     if (use_selfplay) {
         char initial_checkpoint[4096];
@@ -3244,6 +3275,9 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         puf_ini_get(ini, "train", "horizon");
     long local_timesteps = total_timesteps / ctx->world_size;
     long train_epochs = local_timesteps / batch_size;
+    if (stop_after) train_epochs = stop_after / ctx->world_size / batch_size;
+    puf_checkpoint::require(pufferl->epoch < train_epochs,
+        "checkpoint is already at or beyond the requested stopping step");
     long checkpoint_interval = puf_ini_get(ini, "base", "checkpoint_interval");
     char target_key[128];
     sweep_metric_key(ini, target_key, sizeof(target_key));
@@ -3254,7 +3288,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     TrainResult result = {0};
     char final_checkpoint[4096] = {0};
 
-    for (long epoch = 0; epoch < train_epochs; epoch++) {
+    for (long epoch = pufferl->epoch; epoch < train_epochs; epoch++) {
         if (pufferl->hypers.async) {
             // Cleanba 2-slot: warmup fills slot 0; then collect into write
             // while training the other slot (exactly one epoch old).
@@ -3302,6 +3336,12 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             if (ctx->artifact_owner) {
                 snprintf(final_checkpoint, sizeof(final_checkpoint),
                     "%s", saved_checkpoint);
+            }
+            if (save_state) {
+                char state_checkpoint[4096];
+                snprintf(state_checkpoint, sizeof(state_checkpoint), "%s/%016ld.train",
+                    checkpoint_dir, pufferl->global_step * pufferl->hypers.world_size);
+                puf_checkpoint::save(pufferl, ini, state_checkpoint);
             }
         }
         if (use_selfplay && saved_checkpoint[0]) {
@@ -3584,8 +3624,13 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
 static int puf_train_rank(TrainContext* context, void* result, void* user) {
     if (!context->artifact_owner)
         assert(freopen("/dev/null", "w", stdout) != nullptr);
-    *(TrainResult*)result = run_train((Ini*)user, context);
-    return 0;
+    try {
+        *(TrainResult*)result = run_train((Ini*)user, context);
+        return 0;
+    } catch (const std::exception& error) {
+        fprintf(stderr, "Training rank %d: %s\n", context->rank, error.what());
+        return 1;
+    }
 }
 
 // The parent owns no CUDA context and supervises all ranks, including rank 0.

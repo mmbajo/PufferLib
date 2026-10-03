@@ -2,7 +2,8 @@
 
 `decision_snake` wraps the pinned C Snake engine used by the Transformer decision
 experiments. It is a separate environment from PufferLib's stock `snake`.
-The [engine source and license](engine/SOURCE.md) retain their original bytes.
+The [engine provenance and license](engine/SOURCE.md) document the pinned gameplay
+code and the appended state serialization API.
 
 Training advances synchronously: observe the board, compute an action, then step
 the C environment once. Time spent computing the action never advances the game.
@@ -42,8 +43,9 @@ training timesteps. Other optimization settings remain PufferLib's defaults;
 this is not a reproduction of the Python campaign's optimizer or training recipe.
 `base.async=0` and `base.cudagraphs=-1` are currently required. The example above
 overrides the duration for a short smoke run; omit that option for the configured
-duration. Native checkpoints contain policy weights, not complete optimizer and
-environment state for an exact continuation.
+duration. Flat `.bin` checkpoints contain policy weights. Opt into complete
+training state with `base.save_training_state=1`; see
+[warm starts and training resumes](../../tools/native_training_checkpoints.md).
 
 Flat checkpoints also omit architecture metadata. If training changes
 `--policy.hidden_size` or `--policy.num_layers`, pass the same settings to `eval`;
@@ -118,6 +120,14 @@ The log reports food as `score`, total reward as `episode_return`, and
 `perf = score / 97`. `terminated` and `truncated` count their respective completed
 episodes. All fields accumulate until the existing PufferLib log reducer reads
 and clears them.
+
+The adapter also defines `PUF_ENV_STATE` and implements `puf_state_size`,
+`puf_state_save`, `puf_state_validate`, and `puf_state_load`. These use exact-size,
+versioned little-endian records with CRC32 and domain validation. Validation does
+not mutate the environment, and failed loads preserve the live state. Records
+include food RNG, ordered body, counters, pending final transitions, logs and
+bound Agent buffers; pointers and rendering resources stay with the receiving
+instance. Loading requires the same observation format and `max_steps`.
 
 ## Training boundary
 

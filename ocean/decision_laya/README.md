@@ -216,8 +216,9 @@ claim that any combination improves learning.
 Use the same imported bundle when evaluating a trained checkpoint: the bundle
 defines architecture, tokenizer, packing and calibration. Puffer's flat weight
 files contain model parameters only. They do not contain architecture metadata,
-optimizer state, collector state or tokenizer files, and cannot provide an exact
-training resume. Puffer evaluation samples actions; benchmark-specific greedy
+optimizer state, collector state or tokenizer files. Both Snake adapters also
+support opt-in [full training resumes](../../tools/native_training_checkpoints.md)
+that restore optimizer, RNG and environment state. Puffer evaluation samples actions; benchmark-specific greedy
 or clocked evaluation is a separate protocol.
 
 ## Validation and current limits
