@@ -15,6 +15,8 @@ Use the [native training benchmark](tools/benchmark_native.md) to measure rollou
 and learner throughput separately from startup, evaluation and checkpoint I/O.
 The [distributed training guide](tools/distributed_training.md) covers multi-GPU
 data parallelism, optional Muon state sharding, and current larger-model limits.
+Use [paired CartPole evaluation](tools/evaluate_decision_learning.md) to compare
+policy quality before and after training on explicitly matched episode seeds.
 
 ## Star to puff up the project!
 
