@@ -173,7 +173,7 @@ static int benchmark_rank(TrainContext* context, void* destination, void* user) 
         result.optimizer_scratch_elements = p->muon.scratch_elems;
         for (int i = 0; i < NUM_PROF; ++i) result.profile[i] = p->profile.accum[i] / 1000.0;
 #ifdef PUFFER_DECISION_POLICY
-        result.padded_tokens = decision_policy_context->bundle.max_len;
+        result.padded_tokens = decision_policy_context->execution_tokens;
 #endif
         if (options.check_replicas) {
             begin = wall_clock(); benchmark_check_replicas(p, control);

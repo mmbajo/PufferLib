@@ -10,6 +10,14 @@ from pathlib import Path
 
 UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
+# Only model/execution treatments may differ in an explicitly declared ablation.
+# Seeds, episode counts, game rules and masks must always remain paired.
+TREATMENT_FIELDS = frozenset(('environment', 'bundle', 'model', 'representation',
+    'observation_format', 'zero_init_critic', 'padded_tokens', 'bundle_max_tokens',
+    'pooling', 'coordinates', 'model_width', 'model_layers', 'params',
+    'temperature', 'sampling', 'sampling_mode'))
+SAMPLING_MODES = {'puffer_philox_categorical': 'sampled',
+                  'greedy_first_max': 'greedy', 'puffer_philox_uniform_legal': 'random'}
 
 
 def finite_number(value):
@@ -69,14 +77,25 @@ def load(path):
         'episode_offset', 'batch', 'model_init_seed', 'environment_seed_base',
         'action_seed_base', 'sampling', 'max_steps', 'temperature', 'padded_tokens',
         'params', 'grid_size', 'action_count', 'primary_metric', 'mask_rule'), 'protocol')
-    for key, expected in (('version', 1), ('environment', 'decision_laya'),
+    for key, expected in (('version', 1),
                          ('grid_size', 10), ('action_count', 4),
-                         ('primary_metric', 'food_score'), ('mask_rule', 'reverse_only'),
-                         ('sampling', 'puffer_philox_categorical')):
+                         ('primary_metric', 'food_score'), ('mask_rule', 'reverse_only')):
         require(protocol[key] == expected and type(protocol[key]) is type(expected),
                 f'{path}: unsupported protocol {key}')
+    require(protocol['environment'] in ('decision_laya', 'decision_snake'),
+            f'{path}: unsupported Snake environment')
+    require(protocol['sampling'] in SAMPLING_MODES, f'{path}: unsupported sampling')
+    if 'sampling_mode' in protocol:
+        require(protocol['sampling_mode'] == SAMPLING_MODES[protocol['sampling']],
+                f'{path}: inconsistent sampling mode')
+    for key in ('observation_format', 'zero_init_critic'):
+        if key in protocol:
+            require(flag(protocol[key]), f'{path}: invalid {key}')
     for key in ('episodes', 'batch', 'padded_tokens', 'params'):
         require(integer(protocol[key], 1), f'{path}: protocol {key} must be a positive integer')
+    if 'bundle_max_tokens' in protocol:
+        require(integer(protocol['bundle_max_tokens'], protocol['padded_tokens']),
+                f'{path}: forward length exceeds bundle token budget')
     require(integer(protocol['max_steps'], 1, (1 << 31) - 1),
             f'{path}: invalid max_steps')
     require(integer(protocol['episode_offset'], 0, UINT32_MAX),
@@ -89,7 +108,8 @@ def load(path):
             protocol['environment_seed_base'] + last_id <= UINT32_MAX and
             protocol['action_seed_base'] + last_id <= UINT64_MAX,
             f'{path}: episode or seed range overflows')
-    require(isinstance(protocol['bundle'], str) and bool(protocol['bundle']) and
+    require(isinstance(protocol['bundle'], str) and
+            (bool(protocol['bundle']) or protocol['environment'] == 'decision_snake') and
             isinstance(protocol['checkpoint'], str), f'{path}: invalid bundle/checkpoint path')
     require(finite_number(protocol['temperature']) and protocol['temperature'] > 0,
             f'{path}: invalid temperature')
@@ -179,14 +199,20 @@ def quantile(values, fraction):
     return values[lower] + (values[min(lower + 1, len(values) - 1)] - values[lower]) * (position - lower)
 
 
-def compare(before_path, after_path, resamples=10000, bootstrap_seed=606001):
+def compare(before_path, after_path, resamples=10000, bootstrap_seed=606001,
+            allow_protocol_differences=()):
     require(integer(resamples, 1000), 'bootstrap resamples must be at least 1000')
     require(integer(bootstrap_seed), 'bootstrap seed must be a nonnegative integer')
     bp, _, before = load(before_path)
     ap, _, after = load(after_path)
-    require({k: v for k, v in bp.items() if k != 'checkpoint'} ==
-            {k: v for k, v in ap.items() if k != 'checkpoint'},
-            'evaluation protocols differ beyond checkpoint path')
+    allowed = set(allow_protocol_differences)
+    require(allowed <= TREATMENT_FIELDS,
+            f'not a permitted treatment field: {sorted(allowed - TREATMENT_FIELDS)}')
+    differences = {key: {'before': bp.get(key), 'after': ap.get(key)}
+        for key in sorted(bp.keys() | ap.keys()) if key != 'checkpoint' and
+        (key not in bp or key not in ap or type(bp[key]) is not type(ap[key]) or bp[key] != ap[key])}
+    require(set(differences) <= allowed,
+            f'evaluation protocols differ beyond checkpoint path: {sorted(set(differences) - allowed)}')
     require(len(before) >= 2, 'paired uncertainty requires at least two episodes')
     ids = sorted(before)
     for episode in ids:
@@ -213,6 +239,8 @@ def compare(before_path, after_path, resamples=10000, bootstrap_seed=606001):
             intervals[name].append(sum(values[i] for i in chosen) / n)
     primary = samples['mean_food_score_change']
     result = {'protocol': bp, 'primary_metric': 'food_score',
+        'after_protocol': ap, 'declared_treatment_fields': sorted(allowed),
+        'protocol_differences': differences,
         'before_file': str(before_path), 'after_file': str(after_path),
         'before_checkpoint': bp['checkpoint'], 'after_checkpoint': ap['checkpoint'],
         'episodes': n, 'bootstrap_resamples': resamples, 'bootstrap_seed': bootstrap_seed,
@@ -236,10 +264,14 @@ def main():
     parser.add_argument('--resamples', type=int, default=10000)
     parser.add_argument('--bootstrap-seed', type=int, default=606001)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--allow-protocol-difference', action='append', default=[],
+                        choices=sorted(TREATMENT_FIELDS),
+                        help='Explicit ablation field; repeat for each allowed difference. Seeds and rules cannot differ.')
     args = parser.parse_args()
     if args.resamples < 1000 or args.bootstrap_seed < 0:
         parser.error('require at least 1000 resamples and a nonnegative bootstrap seed')
-    result = compare(args.before, args.after, args.resamples, args.bootstrap_seed)
+    result = compare(args.before, args.after, args.resamples, args.bootstrap_seed,
+                     args.allow_protocol_difference)
     text = json.dumps(result, indent=2) + '\n'
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

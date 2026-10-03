@@ -181,6 +181,38 @@ fine-tuning experiment. The act head has no task loss, and imported calibration
 has not been refitted after fine-tuning. State truncation is rejected in this
 training adapter so it cannot quietly omit board information.
 
+Three optional controls support explicit training experiments. All default to
+`0`; specify the same settings when evaluating the corresponding policy.
+
+| Setting | Default (`0`) | Optional behavior |
+| --- | --- | --- |
+| `env.observation_format` | Original complete Snake grid | `1` prepends zero-based head/food coordinates and signed food-minus-head row/column offsets, retaining every grid cell and the original question/options |
+| `policy.zero_init_critic` | Historical random initialization of the new value head | `1` initializes its weights and bias to zero while preserving the RNG sequence and every other initial parameter |
+| `policy.sequence_length` | Pad execution to the bundle's `max_len` | An integer from `1` through `max_len` selects a smaller execution workspace; an input exceeding it is rejected, never truncated |
+
+For example, opt into all three controls explicitly:
+
+```sh
+./build/puffer_decision_laya train --policy.bundle=bundles/laya \
+    --env.observation_format=1 --policy.zero_init_critic=1 \
+    --policy.sequence_length=384
+```
+
+The coordinate summary describes observed geometry; it supplies no recommended
+action, collision filter or new reward. A full board reports that food is absent.
+The critic setting changes initialization only: loading a trained flat checkpoint
+restores its saved critic. Encoder-only imports retain the same initialization of
+their other fresh heads. These settings do not change parameter names, shapes or
+flat checkpoint layout.
+
+The sequence setting preserves the bundle's packing and calibration. Reducing
+padding can alter floating-point results and sampled trajectories, so record it
+as part of the protocol and hold it fixed in a primary policy comparison. Token
+counts depend on the tokenizer and state; a setting that fits an initial board
+must also fit later boards. The CPU observation test checks both Snake formats
+and rejects insufficient budgets. These controls are experiment options, not a
+claim that any combination improves learning.
+
 Use the same imported bundle when evaluating a trained checkpoint: the bundle
 defines architecture, tokenizer, packing and calibration. Puffer's flat weight
 files contain model parameters only. They do not contain architecture metadata,
@@ -233,9 +265,21 @@ python tests/test_pretrained_input.py --executable build/test_pretrained_input \
 # Audit an existing native training checkpoint; use that run's initial seed:
 ./build/test_laya_checkpoint bundles/laya /path/to/trained-puffer-checkpoint.bin 73
 
+# If the run explicitly zero-initialized its new critic:
+./build/test_laya_checkpoint bundles/laya /path/to/trained-puffer-checkpoint.bin 73 \
+    --zero-init-critic
+
 # Run these inside an existing GPU allocation:
 python tests/test_pretrained_encoder.py --executable build/test_pretrained_encoder
 python tests/test_pretrained_decision.py --executable build/test_pretrained_decision
+
+# Optional initialization/padding regression checks. The full gradient test
+# requires a small test bundle with max_len=512; use forward-only for full Laya.
+./tests/build_decision_policy_options.sh
+./build/test_decision_policy_options --host-only
+./build/test_decision_policy_options /path/to/tiny-bert-test-bundle
+./build/test_decision_policy_options bundles/laya --forward-only
+./build/test_decision_policy_options bundles/laya --forward-only --coordinates
 
 # Optional actual-model test; uses existing files without downloading:
 python tests/test_pretrained_bundle.py --executable build/test_pretrained_bundle \

@@ -157,7 +157,11 @@ The versioned `PUFDT01` interchange file is described in
 [`src/decision_checkpoint.cuh`](../../src/decision_checkpoint.cuh). It contains
 architecture settings and model weights, with no optimizer or environment state.
 It is used by the native numerical validation harness and is distinct from
-PufferLib's flat policy checkpoint format.
+PufferLib's flat policy checkpoint format. The
+[native Snake evaluator](../../tools/evaluate_snake_learning.md#action-modes-and-board-checkpoint-imports)
+also loads it with `--pufdt`, preserving the exported pooling and coordinate
+settings. Build that runner with `PUFFER_EVAL_ENV=decision_snake`; select
+`--sampling=sampled`, `greedy` or `random` explicitly when comparing protocols.
 
 ## Validation
 

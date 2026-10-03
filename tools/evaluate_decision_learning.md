@@ -31,6 +31,17 @@ tokenizer and calibration. Ordinary configuration overrides, including
 `--base.gpu_offset`, remain available. This tool is specific to the two-action
 CartPole decision adapter, not a generic environment evaluator.
 
+The imported-policy controls `--policy.zero_init_critic=1` and
+`--policy.sequence_length=N` also apply here; see the
+[decision training guide](../ocean/decision_laya/README.md#fine-tune-through-puffer).
+The protocol records the effective execution length as `padded_tokens`, the
+bundle limit separately as `bundle_max_tokens`, and `zero_init_critic` explicitly.
+Hold these settings fixed between paired evaluations. A shorter execution
+budget rejects overlength inputs instead of truncating the state; a loaded
+checkpoint restores its saved critic. Old default-only JSONL files remain
+readable, but comparisons reject missing or different control metadata rather
+than assuming equivalent settings.
+
 For episode identifier `i`, the initial environment RNG seed is
 `env_seed + i` and the action-sampler Philox seed is `action_seed + i`, with
 subsequence and offset zero. These seeds are reset independently for every

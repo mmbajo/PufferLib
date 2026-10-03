@@ -88,6 +88,36 @@ class ComparisonTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, f'summary {field}'):
                         comparison.load(path)
 
+    def test_effective_policy_controls_are_validated_and_compared(self):
+        controls = dict(padded_tokens=512, bundle_max_tokens=512, zero_init_critic=False)
+        before = self.fixture('controlled', [4, 12], changed=lambda rows: rows[0].update(controls))
+        self.assertEqual(comparison.compare(before, before, resamples=1000)['mean_length_change'], 0)
+        for field, value in (('padded_tokens', 384), ('bundle_max_tokens', 1024),
+                             ('zero_init_critic', True)):
+            with self.subTest(field=field):
+                after = self.fixture('different', [4, 12],
+                    changed=lambda rows: rows[0].update({**controls, field: value}))
+                with self.assertRaisesRegex(ValueError, 'protocols differ'):
+                    comparison.compare(before, after, resamples=1000)
+        legacy = self.fixture('legacy', [4, 12])
+        comparison.load(legacy)
+        with self.assertRaisesRegex(ValueError, 'protocols differ'):
+            comparison.compare(legacy, before, resamples=1000)
+
+    def test_malformed_policy_controls_rejected(self):
+        controls = dict(padded_tokens=384, bundle_max_tokens=512, zero_init_critic=False)
+        for field, values in (
+            ('padded_tokens', (0, -1, True, 384.5, '384', float('nan'))),
+            ('bundle_max_tokens', (383, 0, False, 512.5, '512', float('inf'))),
+            ('zero_init_critic', (2, -1, .5, 0., '1', float('nan'))),
+        ):
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    path = self.fixture('bad-control', [4, 12],
+                        changed=lambda rows: rows[0].update({**controls, field: value}))
+                    with self.assertRaisesRegex(ValueError, field):
+                        comparison.load(path)
+
     def test_initial_state_must_have_four_finite_numbers(self):
         for state in ([0, 0, 0], [0, 0, 0, 0, 0], [0, 0, float('nan'), 0],
                       [0, float('inf'), 0, 0], [0, '0', 0, 0], [0, True, 0, 0], None):
