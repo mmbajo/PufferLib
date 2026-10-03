@@ -48,6 +48,12 @@ rate, with the beta/epsilon/decay settings as metadata. A flat model-weight file
 alone does not contain that optimizer state. Scratch reductions and derived
 update scalars are recomputed and need not be restored.
 
+Both Snake adapters support [full training checkpoints](native_training_checkpoints.md)
+with Adam as well as Muon. Set `base.save_training_state=1` and later use
+`base.resume_path` with the same optimizer and settings. Adam restoration validates
+that its step agrees with the completed epochs and that second moments are
+nonnegative. Model-only warm starts intentionally begin with fresh moments.
+
 ## Validation
 
 Generate reference updates with an installed CPU PyTorch, then build and run the
