@@ -2,6 +2,7 @@
 #define IB_SNAKE_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,15 @@ double ib_snake_reward(const IBSnake *env);
 double ib_snake_episode_return(const IBSnake *env);
 /* Number of food items eaten, independent of the death penalty in return. */
 double ib_snake_score(const IBSnake *env);
+
+/* Version 1 snapshot: little-endian integers/IEEE binary64, explicit lengths
+ * and CRC32. No pointers/padding are serialized. Exact-sized buffers required.
+ * Save/load return 0 on success, -1 on invalid data or unsupported float ABI.
+ * Rejected loads leave the destination unchanged. Unused body slots are zeroed. */
+enum { IB_SNAKE_STATE_BYTES = 476 };
+size_t ib_snake_state_size(void);
+int ib_snake_state_save(const IBSnake *env, void *output, size_t bytes);
+int ib_snake_state_load(IBSnake *env, const void *input, size_t bytes);
 
 #ifdef __cplusplus
 }

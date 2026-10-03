@@ -3,6 +3,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <float.h>
+#include <math.h>
 
 struct IBSnake {
     int snake[IB_SNAKE_CELLS]; /* Head first; unused entries have no meaning. */
@@ -145,3 +148,113 @@ double ib_snake_episode_return(const IBSnake *env) {
     return env ? env->episode_return : 0;
 }
 double ib_snake_score(const IBSnake *env) { return env ? env->score : 0; }
+
+/* Snapshot support is independent of the transition/RNG implementation above. */
+static void state_put32(unsigned char *p, uint32_t value) {
+    for (int i = 0; i < 4; ++i) p[i] = (unsigned char)(value >> (8 * i));
+}
+static uint32_t state_get32(const unsigned char *p) {
+    uint32_t value = 0;
+    for (int i = 0; i < 4; ++i) value |= (uint32_t)p[i] << (8 * i);
+    return value;
+}
+static void state_put64(unsigned char *p, double value) {
+    uint64_t bits; memcpy(&bits, &value, sizeof(bits));
+    for (int i = 0; i < 8; ++i) p[i] = (unsigned char)(bits >> (8 * i));
+}
+static double state_get64(const unsigned char *p) {
+    uint64_t bits = 0; double value;
+    for (int i = 0; i < 8; ++i) bits |= (uint64_t)p[i] << (8 * i);
+    memcpy(&value, &bits, sizeof(value)); return value;
+}
+static uint32_t state_crc32(const unsigned char *p, size_t bytes) {
+    uint32_t crc = UINT32_MAX;
+    for (size_t i = 0; i < bytes; ++i) {
+        crc ^= p[i];
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ ((crc & 1) ? UINT32_C(0xedb88320) : 0);
+    }
+    return ~crc;
+}
+static int state_valid(const IBSnake *env) {
+    if (!env || sizeof(double) != 8 || DBL_MANT_DIG != 53 || DBL_MAX_EXP != 1024 ||
+            env->max_steps < 1 || env->steps < 0 || env->steps > env->max_steps ||
+            env->length < 3 || env->length > IB_SNAKE_CELLS ||
+            env->score != env->length - 3 || env->score > env->steps ||
+            (env->terminated != 0 && env->terminated != 1) ||
+            (env->truncated != 0 && env->truncated != 1) ||
+            (env->terminated && env->truncated) ||
+            !isfinite(env->reward) || !isfinite(env->episode_return)) return 0;
+    int collision = env->outcome == -1, full = env->length == IB_SNAKE_CELLS;
+    if (env->outcome < -1 || env->outcome > 1 ||
+            env->terminated != (collision || full) || (env->outcome == 1) != full ||
+            env->truncated != (!env->terminated && env->steps == env->max_steps) ||
+            env->episode_return != env->score - collision ||
+            (collision && (env->steps == 0 || env->score >= env->steps || env->reward != -1)) ||
+            (!collision && env->reward != 0 && env->reward != 1) ||
+            (env->reward == 1 && env->score == 0) || (full && env->reward != 1)) return 0;
+    unsigned char occupied[IB_SNAKE_CELLS] = {0};
+    for (int i = 0; i < env->length; ++i) {
+        int cell = env->snake[i];
+        if (cell < 0 || cell >= IB_SNAKE_CELLS || occupied[cell]) return 0;
+        if (i && abs(cell / 10 - env->snake[i-1] / 10) +
+                abs(cell % 10 - env->snake[i-1] % 10) != 1) return 0;
+        occupied[cell] = 1;
+    }
+    if (full ? env->food != -1 : (env->food < 0 || env->food >= IB_SNAKE_CELLS || occupied[env->food])) return 0;
+    if (env->steps == 0 && (env->length != 3 || env->reward != 0 ||
+            env->snake[0] != 55 || env->snake[1] != 54 || env->snake[2] != 53)) return 0;
+    return 1;
+}
+
+size_t ib_snake_state_size(void) { return IB_SNAKE_STATE_BYTES; }
+
+int ib_snake_state_save(const IBSnake *env, void *output, size_t bytes) {
+    if (!output || bytes != IB_SNAKE_STATE_BYTES || !state_valid(env)) return -1;
+    unsigned char data[IB_SNAKE_STATE_BYTES] = {0};
+    memcpy(data, "IBSNAK01", 8);
+    state_put32(data + 8, 1); state_put32(data + 12, IB_SNAKE_STATE_BYTES);
+    state_put32(data + 16, IB_SNAKE_GRID_SIZE);
+    state_put32(data + 20, (uint32_t)env->max_steps);
+    state_put32(data + 24, (uint32_t)env->steps); state_put32(data + 28, env->rng);
+    state_put32(data + 32, (uint32_t)env->length);
+    state_put32(data + 36, env->food < 0 ? UINT32_MAX : (uint32_t)env->food);
+    state_put32(data + 40, (uint32_t)env->terminated);
+    state_put32(data + 44, (uint32_t)env->truncated);
+    state_put32(data + 48, env->outcome < 0 ? UINT32_MAX : (uint32_t)env->outcome);
+    state_put32(data + 52, (uint32_t)env->score);
+    state_put64(data + 56, env->reward); state_put64(data + 64, env->episode_return);
+    for (int i = 0; i < IB_SNAKE_CELLS; ++i)
+        state_put32(data + 72 + 4*i, i < env->length ? (uint32_t)env->snake[i] : UINT32_MAX);
+    state_put32(data + 472, state_crc32(data, 472));
+    memcpy(output, data, sizeof(data)); return 0;
+}
+
+int ib_snake_state_load(IBSnake *env, const void *input, size_t bytes) {
+    if (!env || !input || bytes != IB_SNAKE_STATE_BYTES || sizeof(double) != 8 ||
+            DBL_MANT_DIG != 53 || DBL_MAX_EXP != 1024) return -1;
+    const unsigned char *data = (const unsigned char *)input;
+    if (memcmp(data, "IBSNAK01", 8) || state_get32(data+8) != 1 ||
+            state_get32(data+12) != bytes || state_get32(data+16) != IB_SNAKE_GRID_SIZE ||
+            state_get32(data+472) != state_crc32(data, 472)) return -1;
+    IBSnake next = {0};
+    uint32_t max_steps = state_get32(data+20), steps = state_get32(data+24);
+    uint32_t length = state_get32(data+32), food = state_get32(data+36);
+    uint32_t terminated = state_get32(data+40), truncated = state_get32(data+44);
+    uint32_t outcome = state_get32(data+48), score = state_get32(data+52);
+    if (max_steps < 1 || max_steps > INT_MAX || steps > max_steps || length < 3 ||
+            length > IB_SNAKE_CELLS || (food != UINT32_MAX && food >= IB_SNAKE_CELLS) ||
+            terminated > 1 || truncated > 1 || (outcome != UINT32_MAX && outcome > 1) || score > 97) return -1;
+    next.max_steps = (int)max_steps; next.steps = (int)steps; next.rng = state_get32(data+28);
+    next.length = (int)length; next.food = food == UINT32_MAX ? -1 : (int)food;
+    next.terminated = (int)terminated; next.truncated = (int)truncated;
+    next.outcome = outcome == UINT32_MAX ? -1 : (int)outcome; next.score = (int)score;
+    next.reward = state_get64(data+56); next.episode_return = state_get64(data+64);
+    for (int i = 0; i < IB_SNAKE_CELLS; ++i) {
+        uint32_t cell = state_get32(data+72+4*i);
+        if (i >= next.length) { if (cell != UINT32_MAX) return -1; }
+        else { if (cell >= IB_SNAKE_CELLS) return -1; next.snake[i] = (int)cell; }
+    }
+    if (!state_valid(&next)) return -1;
+    *env = next; return 0;
+}
