@@ -1327,6 +1327,97 @@ void muon_step(Muon* m, Float weights, Prec grads,
         weights.data, grads.data, m->lr, 0.0f, n_grad);
 }
 
+// Adam uses replicated FP32 moments after the same globally averaged gradient
+// as Muon. Weight decay is coupled L2 (torch.optim.Adam), applied after global
+// gradient clipping; this is intentionally not AdamW or a sharded optimizer.
+enum PufOptimizerKind { PUF_OPTIMIZER_MUON = 0, PUF_OPTIMIZER_ADAM = 1 };
+
+struct Adam {
+    double beta1, beta2, eps, weight_decay;
+    int64_t parameter_elems;
+    Float first_moment, second_moment;
+    float* lr;
+    uint64_t* step;
+    float* grad_norm;
+    float* norm_partials;
+    float* update_scalars; // step size, second-moment correction, clipping factor
+};
+
+static void adam_require(bool condition, const char* message) {
+    if (!condition) {
+        fprintf(stderr, "Adam: %s\n", message);
+        exit(EXIT_FAILURE);
+    }
+}
+
+void adam_init(Adam* a, Allocator* parameters, double beta1, double beta2,
+        double eps, double weight_decay, Allocator* alloc) {
+    adam_require(!USE_BF16, "currently requires FP32 precision");
+    adam_require(std::isfinite(beta1) && beta1 >= 0 && beta1 < 1 &&
+        std::isfinite(beta2) && beta2 >= 0 && beta2 < 1,
+        "beta1 and beta2 must be finite and in [0, 1)");
+    adam_require(std::isfinite(eps) && eps > 0 && (float)eps > 0 &&
+        std::isfinite((float)eps), "eps must be positive and representable in FP32");
+    adam_require(std::isfinite(weight_decay) && weight_decay >= 0 &&
+        std::isfinite((float)weight_decay), "weight_decay must be finite and nonnegative");
+    adam_require(parameters->total_elems > 0, "parameter buffer must not be empty");
+    a->beta1 = beta1; a->beta2 = beta2; a->eps = eps; a->weight_decay = weight_decay;
+    a->parameter_elems = parameters->total_elems;
+    a->first_moment = {.shape = {a->parameter_elems}};
+    a->second_moment = {.shape = {a->parameter_elems}};
+    alloc_register(alloc, &a->first_moment);
+    alloc_register(alloc, &a->second_moment);
+    cudaMalloc((void**)&a->lr, sizeof(float));
+    cudaMalloc((void**)&a->step, sizeof(uint64_t));
+    cudaMalloc((void**)&a->grad_norm, sizeof(float));
+    cudaMalloc((void**)&a->norm_partials, 256 * sizeof(float));
+    cudaMalloc((void**)&a->update_scalars, 3 * sizeof(float));
+    cudaMemset(a->step, 0, sizeof(uint64_t));
+}
+
+// A device counter increments on every executed update, including graph replay.
+// Resume must restore this scalar together with both moments and the LR.
+static __global__ void adam_advance_step(uint64_t* step, const float* learning_rate,
+        const float* sum_sq, double beta1, double beta2, float max_grad_norm,
+        float* scalars) {
+    ++*step;
+    scalars[0] = (float)((double)*learning_rate / (1.0 - pow(beta1, (double)*step)));
+    scalars[1] = (float)sqrt(1.0 - pow(beta2, (double)*step));
+    scalars[2] = fminf(max_grad_norm / (sqrtf(*sum_sq) + 1e-6f), 1.0f);
+}
+
+static __global__ void adam_update(float* weights, const precision_t* gradients,
+        float* first, float* second, const float* scalars, double beta1,
+        double beta2, double eps, double weight_decay, int64_t n) {
+    const float step_size = scalars[0], correction2_sqrt = scalars[1], clip = scalars[2];
+    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+            i < n; i += (int64_t)blockDim.x * gridDim.x) {
+        float g = to_float(gradients[i]) * clip;
+        g += (float)weight_decay * weights[i];
+        float m = (float)beta1 * first[i] + (float)(1.0 - beta1) * g;
+        float v = (float)beta2 * second[i] + (float)(1.0 - beta2) * g * g;
+        first[i] = m;
+        second[i] = v;
+        float denominator = sqrtf(v) / correction2_sqrt + (float)eps;
+        weights[i] -= step_size * m / denominator;
+    }
+}
+
+void adam_step(Adam* a, Float weights, Prec gradients, float max_grad_norm,
+        cudaStream_t stream = 0) {
+    int64_t n = numel(gradients.shape);
+    adam_require(n == a->parameter_elems && numel(weights.shape) == n,
+        "weight, gradient and parameter counts differ");
+    int blocks = muon_grid_size(n, 256);
+    muon_sum_sq_partials<<<blocks, 256, 0, stream>>>(a->norm_partials, gradients.data, n);
+    muon_sum_sq_reduce<<<1, 256, 0, stream>>>(a->grad_norm, a->norm_partials, blocks);
+    adam_advance_step<<<1, 1, 0, stream>>>(a->step, a->lr, a->grad_norm,
+        a->beta1, a->beta2, max_grad_norm, a->update_scalars);
+    adam_update<<<muon_grid_size(n), BLOCK_SIZE, 0, stream>>>(weights.data, gradients.data,
+        a->first_moment.data, a->second_moment.data, a->update_scalars,
+        a->beta1, a->beta2, a->eps, a->weight_decay, n);
+}
+
 // Train layout is (B, T). Views are sliced each mb; scratch is allocated.
 struct TrainGraph {
     Prec mb_state;       // view into train_state (L, A, H); read with agent_off

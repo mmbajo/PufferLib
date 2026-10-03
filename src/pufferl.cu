@@ -307,6 +307,8 @@ typedef struct {
     float min_lr_ratio;
     bool anneal_lr;
     float momentum;
+    PufOptimizerKind optimizer;
+    double adam_beta1, adam_beta2, adam_eps, adam_weight_decay;
     int minibatch_size;
     float replay_ratio;
     long total_timesteps;
@@ -544,6 +546,7 @@ typedef struct PuffeRL {
     Allocator activ_alloc;       // train + primary rollout (shared)
     VecEnv* vec;
     Muon muon;
+    Adam adam;
     ncclComm_t nccl_comm;  // NCCL communicator for multi-GPU
     Hypers hypers;
     bool is_continuous;  // True if all action dimensions are continuous (size==1)
@@ -581,6 +584,57 @@ typedef struct PuffeRL {
     curandStatePhilox4_32_10_t** rng_states;  // per-buffer persistent RNG states [num_buffers]
     char env_name[64];  // For policy arch rebuild at create.
 } PuffeRL;
+
+static float* puf_optimizer_lr(PuffeRL* p) {
+    return p->hypers.optimizer == PUF_OPTIMIZER_ADAM ? p->adam.lr : p->muon.lr;
+}
+
+static void puf_optimizer_step(PuffeRL* p, Float weights, Prec gradients,
+        float max_grad_norm, cudaStream_t stream) {
+    if (p->hypers.optimizer == PUF_OPTIMIZER_ADAM)
+        adam_step(&p->adam, weights, gradients, max_grad_norm, stream);
+    else
+        muon_step(&p->muon, weights, gradients, max_grad_norm, stream);
+}
+
+static PufOptimizerKind puf_optimizer_kind(Ini* ini) {
+    Dict* train = puf_ini_section(ini, "train", 1);
+    DictItem* item = dict_find(train, "optimizer");
+    if (!item) item = puf_ini_set(train, "optimizer", "muon");
+    if (item->str && !item->len) {
+        if (!strcmp(item->str, "muon")) return PUF_OPTIMIZER_MUON;
+        if (!strcmp(item->str, "adam")) return PUF_OPTIMIZER_ADAM;
+    }
+    fprintf(stderr, "train.optimizer must be muon or adam\n");
+    exit(EXIT_FAILURE);
+}
+
+static double puf_adam_option(Ini* ini, const char* name, const char* fallback,
+        double minimum, double maximum, bool strict_minimum, bool strict_maximum) {
+    Dict* train = puf_ini_section(ini, "train", 1);
+    DictItem* item = dict_find(train, name);
+    if (!item) item = puf_ini_set(train, name, fallback);
+    double value = item->value;
+    bool valid = !item->len;
+    if (item->str) {
+        char* end = NULL;
+        errno = 0;
+        value = strtod(item->str, &end);
+        valid = valid && end != item->str && errno != ERANGE;
+        while (end && isspace((unsigned char)*end)) ++end;
+        valid = valid && end && !*end;
+    }
+    valid = valid && std::isfinite(value) && std::isfinite((float)value) &&
+        (strict_minimum ? value > minimum : value >= minimum) &&
+        (strict_maximum ? value < maximum : value <= maximum);
+    if (strict_minimum && minimum == 0) valid = valid && (float)value > 0;
+    if (!valid) {
+        fprintf(stderr, "train.%s must be a finite scalar in %c%g, %g%c representable in FP32\n",
+            name, strict_minimum ? '(' : '[', minimum, maximum, strict_maximum ? ')' : ']');
+        exit(EXIT_FAILURE);
+    }
+    return value;
+}
 
 // Infer path: sample + forward, then vec workers.
 static void profile_begin(const char* tag, bool enable) {
@@ -1701,7 +1755,7 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
                 numel(pufferl->grad.shape), NCCL_PRECISION, ncclAvg,
                 pufferl->nccl_comm, stream);
         }
-        muon_step(&pufferl->muon, primary->master_weights,
+        puf_optimizer_step(pufferl, primary->master_weights,
             pufferl->grad, hypers->max_grad_norm, stream);
         if (USE_BF16) {
             int64_t n = numel(primary->param.shape);
@@ -1720,7 +1774,6 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     int batch_size = hypers->total_agents * hypers->horizon;
     bool anneal_lr = hypers->anneal_lr;
     int current_epoch = pufferl->epoch;
-    Muon* muon = &pufferl->muon;
 
     // Schedule over this rank's train epochs (same as outer loop), not global
     // total_timesteps/batch — multi-GPU would otherwise only traverse 1/W of the
@@ -1729,7 +1782,7 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     if (anneal_lr) {
         float lr_min = hypers->min_lr_ratio * hypers->lr;
         float lr = cosine_annealing(hypers->lr, lr_min, current_epoch, total_epochs);
-        cudaMemcpy(muon->lr, &lr, sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(puf_optimizer_lr(pufferl), &lr, sizeof(float), cudaMemcpyHostToDevice);
     }
 
     // Annealed entropy coefficient — same cosine shape as lr. With PG signal
@@ -1946,6 +1999,11 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .min_lr_ratio = puf_ini_get(ini, "train", "min_lr_ratio"),
         .anneal_lr = puf_ini_get(ini, "train", "anneal_lr") != 0,
         .momentum = puf_ini_get(ini, "train", "momentum"),
+        .optimizer = puf_optimizer_kind(ini),
+        .adam_beta1 = puf_adam_option(ini, "adam_beta1", "0.9", 0, 1, false, true),
+        .adam_beta2 = puf_adam_option(ini, "adam_beta2", "0.999", 0, 1, false, true),
+        .adam_eps = puf_adam_option(ini, "adam_eps", "1e-8", 0, INFINITY, true, false),
+        .adam_weight_decay = puf_adam_option(ini, "adam_weight_decay", "0", 0, INFINITY, false, false),
         .minibatch_size = puf_ini_get(ini, "train", "minibatch_size"),
         .replay_ratio = puf_ini_get(ini, "train", "replay_ratio"),
         .total_timesteps = puf_ini_get(ini, "train", "total_timesteps"),
@@ -1972,6 +2030,10 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .num_threads = puf_ini_get(ini, "vec", "num_threads"),
         .seed = puf_ini_get(ini, "base", "seed"),
     };
+    if (hypers.optimizer == PUF_OPTIMIZER_ADAM && (USE_BF16 || hypers.distributed_optimizer)) {
+        fprintf(stderr, "Adam requires FP32 and train.distributed_optimizer=0; its moments are replicated\n");
+        exit(1);
+    }
     if (hypers.distributed_optimizer && (USE_BF16 || hypers.async || hypers.cudagraphs)) {
         fprintf(stderr, "distributed_optimizer requires FP32, base.async=0 and base.cudagraphs=-1\n");
         exit(1);
@@ -2188,8 +2250,13 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     cudaMalloc((void**)&pufferl->act_sizes, num_action_heads * sizeof(int));
     cudaMalloc((void**)&pufferl->losses, NUM_LOSSES * sizeof(float));
 
-    muon_init(&pufferl->muon, &primary->params_alloc, hypers.momentum, acts,
-        hypers.rank, hypers.world_size, pufferl->nccl_comm, hypers.distributed_optimizer);
+    if (hypers.optimizer == PUF_OPTIMIZER_ADAM) {
+        adam_init(&pufferl->adam, &primary->params_alloc, hypers.adam_beta1,
+            hypers.adam_beta2, hypers.adam_eps, hypers.adam_weight_decay, acts);
+    } else {
+        muon_init(&pufferl->muon, &primary->params_alloc, hypers.momentum, acts,
+            hypers.rank, hypers.world_size, pufferl->nccl_comm, hypers.distributed_optimizer);
+    }
 
     // Allocate all policy param/activ pools, then train grads + shared acts.
     for (int b = 0; b < pufferl->num_policies; b++) {
@@ -2248,8 +2315,9 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     cudaMemcpy(pufferl->act_sizes, act_sizes,
         num_action_heads*sizeof(int), cudaMemcpyHostToDevice);
     cudaMemset(pufferl->losses, 0, NUM_LOSSES * sizeof(float));
-    cudaMemcpy(pufferl->muon.lr, &hypers.lr, sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemset(pufferl->muon.mb.data, 0, numel(pufferl->muon.mb.shape) * sizeof(float));
+    cudaMemcpy(puf_optimizer_lr(pufferl), &hypers.lr, sizeof(float), cudaMemcpyHostToDevice);
+    if (hypers.optimizer == PUF_OPTIMIZER_MUON)
+        cudaMemset(pufferl->muon.mb.data, 0, numel(pufferl->muon.mb.shape) * sizeof(float));
 
 #ifdef PUFFER_NETHACK
     nethack_policy_init(ini);
