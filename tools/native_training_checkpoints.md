@@ -62,7 +62,9 @@ The same controls work with `decision_laya`, including encoder-only BERT imports
 full Laya bundles and optional coordinate observations. Pass the original bundle,
 policy options, training settings, environment settings and per-rank batch layout
 on both commands. Data parallelism and Muon's whole-matrix state sharding are
-supported when those settings remain identical.
+supported when those settings remain identical. Adam resumes restore both FP32
+moment buffers and its bias-correction step; its moments remain replicated and
+require `train.distributed_optimizer=0`. The optimizer cannot change on resume.
 
 ## Compatibility and failure handling
 
@@ -73,8 +75,8 @@ environments, BF16, asynchronous collection and changing world size are rejected
 Other environments can implement the four `PUF_ENV_STATE` callbacks; no raw Env
 structs or pointer values are persisted.
 
-The loader checks the exact executable SHA-256, CUDA/driver/cuRAND/cuBLAS/NCCL
-versions, GPU model, world size, and resolved `env`, `policy`, `train` and `vec`
+The loader checks the exact executable SHA-256, CUDA/driver/cuRAND/NCCL versions,
+compiled and loaded cuBLAS versions, GPU model, world size, and resolved `env`, `policy`, `train` and `vec`
 settings. Relevant base seed/collection controls are included. Configuration
 values are compared in their parsed string representation, so use the same
 spelling for numeric settings too. Paths for output, logging, checkpoints and
@@ -82,9 +84,11 @@ stopping may change. The imported bundle may move: its manifest, tokenizer and
 configuration file contents are hashed instead of its directory path. The full
 saved model replaces the initial imported weights; the original bundle remains
 required to construct its architecture and tokenizer. This deliberately strict
-version does not promise migration across builds or hardware.
+version does not promise migration across builds or hardware. Retain the producing
+executable alongside long-lived checkpoints; rebuilding is not assumed to produce
+the same executable hash. Older flat weights remain usable for warm starts.
 
-Every rank saves model weights, its optimizer momentum, LR, entropy coefficient,
+Every rank saves model weights, its optimizer moments/counter, LR, entropy coefficient,
 action and minibatch RNG, recurrent carry, device environment buffers, pending
 timeout observations, and complete environment state. Epoch/global-step counters
 are common metadata. Parameter and RNG buffers restore byte-for-byte. Temporary
@@ -134,9 +138,15 @@ python3 -m unittest tests.test_decision_snake tests.test_decision_snake_state -v
 python3 tests/run_native_checkpoint_tests.py \
     --probe build/test_native_checkpoint_decision_snake \
     --trainer build/puffer_decision --output build/checkpoint-validation --gpus=2
+
+# Repeat with Adam and its replicated moments.
+python3 tests/run_native_checkpoint_tests.py \
+    --probe build/test_native_checkpoint_decision_snake \
+    --trainer build/puffer_decision --output build/checkpoint-adam-validation \
+    --gpus=2 --optimizer=adam
 ```
 
-The GPU runner checks one and two ranks, replicated and sharded Muon, fresh-process
+The GPU runner checks one and two ranks, replicated Adam or replicated/sharded Muon, fresh-process
 rollout replay, malformed/incompatible checkpoint rejection, real training
 warm-start behavior and full resume. The text probe uses the same CUDA test with
 `./tests/build_native_checkpoint.sh decision_laya`; pass its imported bundle after

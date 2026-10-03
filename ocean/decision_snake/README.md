@@ -31,8 +31,9 @@ evaluation and the legacy `--profile` kernel harness are unsupported for this
 Transformer. `--cu` selects GPU environments in PufferLib and does not apply here:
 the environment remains C, while policy computation and training run on CUDA.
 
-This is PufferLib's native rollout collector, PPO loss, Muon optimizer, logging,
-and checkpoint path. The policy is a bidirectional Transformer with four attention
+This uses PufferLib's native rollout collector, PPO loss, logging and checkpoint
+path. The optimizer defaults to Muon; [Adam can be selected explicitly](../../tools/native_optimizers.md).
+The policy is a bidirectional Transformer with four attention
 heads, head pooling, head-relative coordinate embeddings, and an ordered body
 embedding. A stateless policy stage replaces MinGRU. `policy.hidden_size` controls
 Transformer width and `policy.num_layers` controls its depth.

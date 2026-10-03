@@ -71,12 +71,13 @@ inline std::string identity(PuffeRL* p, Ini* ini) {
     for(const auto& field:fields) out<<field<<"\n";
     // Raw CUDA RNG records are deliberately tied to this executable/backend.
     static const std::string executable=hex(hash_file("/proc/self/exe"));
-    int runtime=0,driver=0,curand=0,nccl=0;
+    int runtime=0,driver=0,curand=0,nccl=0,blas=0;
     cuda_ok(cudaRuntimeGetVersion(&runtime)); cuda_ok(cudaDriverGetVersion(&driver));
     require(curandGetVersion(&curand)==CURAND_STATUS_SUCCESS,"cannot read cuRAND version");
     require(ncclGetVersion(&nccl)==ncclSuccess,"cannot read NCCL version");
+    require(cublasGetVersion(g_cublas_handle,&blas)==CUBLAS_STATUS_SUCCESS,"cannot read cuBLAS version");
     cudaDeviceProp device{}; cuda_ok(cudaGetDeviceProperties(&device,p->hypers.gpu_id));
-    out<<executable<<"\n"<<runtime<<":"<<driver<<":"<<curand<<":"<<nccl<<":"<<CUBLAS_VERSION
+    out<<executable<<"\n"<<runtime<<":"<<driver<<":"<<curand<<":"<<nccl<<":"<<CUBLAS_VERSION<<":"<<blas
        <<":"<<sizeof(curandStatePhilox4_32_10_t)<<"\n"<<device.name<<":"<<device.major<<":"<<device.minor<<"\n";
     out<<p->hypers.world_size<<":"<<numel(p->policies[0].master_weights.shape)<<":"
        <<p->vec->size<<":"<<sizeof(obs_t)<<":"<<OBS_SIZE<<"\n";
@@ -109,8 +110,12 @@ inline std::vector<Buffer> buffers(PuffeRL* p) {
         add(name,t.data,numel(t.shape)*sizeof(*t.data),true,floats);
     };
     tensor("weights",p->policies[0].master_weights,true);
-    tensor("muon.momentum",p->muon.mb,true);
-    add("optimizer.lr",p->muon.lr,sizeof(float),true,true);
+    if(p->hypers.optimizer==PUF_OPTIMIZER_ADAM) {
+        tensor("adam.first_moment",p->adam.first_moment,true);
+        tensor("adam.second_moment",p->adam.second_moment,true);
+        add("adam.step",p->adam.step,sizeof(uint64_t),true,false);
+    } else tensor("muon.momentum",p->muon.mb,true);
+    add("optimizer.lr",puf_optimizer_lr(p),sizeof(float),true,true);
     add("ppo.ent_coef",p->ppo_bufs.ent_coef,sizeof(float),true,true);
     add("logging.losses",p->losses,NUM_LOSSES*sizeof(float),true,true);
     add("sampler.seed",&p->seed,sizeof(p->seed),false,false);
@@ -269,6 +274,21 @@ inline void load(PuffeRL* p,Ini* ini,const std::string& source) {
     auto state=buffers(p);
     require(rank_io(source,p->hypers.rank,m,state,false)==m.ranks[p->hypers.rank],
         "rank does not belong to this committed checkpoint");
+    if(p->hypers.optimizer==PUF_OPTIMIZER_ADAM) {
+        const int updates=std::max(0,int(p->hypers.replay_ratio*int(batch)/p->hypers.minibatch_size));
+        require(updates==0 || m.epoch<=UINT64_MAX/uint64_t(updates),"invalid Adam update count");
+        for(const auto& buffer:state) {
+            if(buffer.name=="adam.step") {
+                uint64_t step; memcpy(&step,buffer.saved.data(),sizeof(step));
+                require(step==m.epoch*uint64_t(updates),"Adam step does not match training epoch");
+            }
+            if(buffer.name=="adam.second_moment")
+                for(size_t i=0;i<buffer.bytes;i+=sizeof(float)) {
+                    float value; memcpy(&value,buffer.saved.data()+i,sizeof(value));
+                    if(value<0) require(false,"negative Adam second moment");
+                }
+        }
+    }
     int env_index=0;
 #ifdef PUF_ENV_STATE
     for(const auto& buffer:state) if(!buffer.pointer)

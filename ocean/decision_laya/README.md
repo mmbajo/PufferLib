@@ -1,7 +1,8 @@
 # Pretrained Transformer decisions in native Puffer
 
 `decision_laya` trains a pretrained Transformer policy with Puffer's native
-collector, PPO objective and Muon optimizer. A raw-text tokenizer runs on the CPU;
+collector and PPO objective. The optimizer defaults to Muon;
+[Adam is an explicit option](../../tools/native_optimizers.md). A raw-text tokenizer runs on the CPU;
 the encoder, typed decision heads and gradients run in CUDA C++. Each training
 step observes the game, computes an action, then advances the environment.
 Python is used only for optional offline imports and reference tests.

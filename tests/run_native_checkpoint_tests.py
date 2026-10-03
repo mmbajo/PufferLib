@@ -15,17 +15,78 @@ import struct
 import subprocess
 
 
+def corrupt_adam_state(directory, rank, field, replacement):
+    """Change a named payload and both SHA layers to test semantic validation."""
+    path = directory / f"rank-{rank}.state"
+    data = bytearray(path.read_bytes())
+    assert hashlib.sha256(data[:-32]).digest() == data[-32:]
+
+    def number(buffer, offset):
+        assert offset + 8 <= len(buffer) - 32
+        return struct.unpack_from("<Q", buffer, offset)[0], offset + 8
+
+    def string(buffer, offset):
+        length, offset = number(buffer, offset)
+        assert offset + length <= len(buffer) - 32
+        return bytes(buffer[offset:offset+length]).decode(), offset + length
+
+    marker, offset = string(data, 0)
+    assert marker == "PUFFER-TRAINING-RANK-1"
+    _, offset = string(data, offset)  # checkpoint ID
+    _, offset = string(data, offset)  # executable/config identity
+    actual_rank, offset = number(data, offset)
+    assert actual_rank == rank
+    _, offset = number(data, offset)  # epoch
+    _, offset = number(data, offset)  # local step
+    count, offset = number(data, offset)
+    changed = False
+    for _ in range(count):
+        name, offset = string(data, offset)
+        size, offset = number(data, offset)
+        assert offset + size <= len(data) - 32
+        if name == field:
+            assert not changed and len(replacement) <= size
+            data[offset:offset+len(replacement)] = replacement
+            changed = True
+        offset += size
+    assert changed and offset == len(data)-32
+    digest = hashlib.sha256(data[:-32]).digest()
+    data[-32:] = digest
+    path.write_bytes(data)
+
+    manifest_path = directory / "COMMITTED"
+    manifest = bytearray(manifest_path.read_bytes())
+    assert hashlib.sha256(manifest[:-32]).digest() == manifest[-32:]
+    marker, offset = string(manifest, 0)
+    assert marker == "PUFFER-TRAINING-COMMIT-1"
+    world, offset = number(manifest, offset)
+    assert rank < world
+    _, offset = string(manifest, offset)
+    _, offset = string(manifest, offset)
+    _, offset = number(manifest, offset)
+    _, offset = number(manifest, offset)
+    assert offset + 32*world == len(manifest)-32
+    manifest[offset+32*rank:offset+32*(rank+1)] = digest
+    manifest[-32:] = hashlib.sha256(manifest[:-32]).digest()
+    manifest_path.write_bytes(manifest)
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gpus", type=int, default=2, choices=(1, 2))
+    parser.add_argument("--optimizer", default="muon", choices=("muon", "adam"))
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     probe, trainer = map(lambda p: str(p.resolve()), (args.probe, args.trainer))
-    outcomes = {}
+    outcomes = {"configuration": {"optimizer": args.optimizer, "gpus": args.gpus}}
+
+    def probe_command(mode, path, world, shard, optimizer=None):
+        return [probe, mode, str(path), str(world), str(shard),
+                f"--optimizer={optimizer or args.optimizer}"]
 
     def run(label, command, success=True):
         try:
@@ -48,16 +109,19 @@ def main():
         assert result.returncode == (0 if success else 1), (label, result.stdout[-4000:])
         return result.stdout
 
-    for world, shard in [(1, 0)] + ([(2, 0), (2, 1)] if args.gpus == 2 else []):
+    cases = [(1, 0)]
+    if args.gpus == 2:
+        cases += [(2, 0)] if args.optimizer == "adam" else [(2, 0), (2, 1)]
+    for world, shard in cases:
         label = f"world{world}-shard{shard}"
         state = output / label
-        before = run(label + "-save", [probe, "save", str(state), str(world), str(shard)])
-        after = run(label + "-load", [probe, "load", str(state), str(world), str(shard)])
+        before = run(label + "-save", probe_command("save", state, world, shard))
+        after = run(label + "-load", probe_command("load", state, world, shard))
         pattern = r"rank=(\d+) next_rollout_sha=([a-f0-9]{64})"
         left, right = dict(re.findall(pattern, before)), dict(re.findall(pattern, after))
         assert len(left) == world and left == right, (label, left, right)
         outcomes[label + "-fresh-process-replay"] = left
-        if world == args.gpus and shard == (1 if world == 2 else 0):
+        if (world, shard) == cases[-1]:
             for fault in ("rank-missing", "rank-truncated", "rank-corrupt", "rank-trailing",
                           "manifest-missing", "manifest-truncated", "partial", "world", "shard"):
                 bad = output / ("bad-" + fault + (".partial" if fault == "partial" else ""))
@@ -76,27 +140,44 @@ def main():
                 wrong_shard = 1-shard if fault == "shard" else shard
                 if fault == "world" and world == 1: continue
                 # The trailing slash checks normalized rejection of staging dirs.
-                run("reject-" + fault, [probe, "load", str(bad) + "/", str(wrong_world), str(wrong_shard)], False)
+                run("reject-" + fault, probe_command("load", str(bad) + "/", wrong_world, wrong_shard), False)
             original = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                         for p in state.iterdir() if p.is_file()}
-            run("reject-existing-committed", [probe, "save", str(state), str(world), str(shard)], False)
+            run("reject-existing-committed", probe_command("save", state, world, shard), False)
             assert original == {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
                                 for p in state.iterdir() if p.is_file()}, "existing checkpoint changed"
             empty = output / "existing-empty"
             empty.mkdir()
-            run("reject-existing-empty", [probe, "save", str(empty), str(world), str(shard)], False)
+            run("reject-existing-empty", probe_command("save", empty, world, shard), False)
             assert not list(empty.iterdir()), "existing empty destination changed"
             # A valid peer record from another same-config checkpoint must
             # never join this cohort, even when shape, rank and counters match.
             donor = output / "another-cohort"
-            run("another-cohort-save", [probe, "save", str(donor), str(world), str(shard)])
+            run("another-cohort-save", probe_command("save", donor, world, shard))
             assert (donor / "ID").read_bytes() != (state / "ID").read_bytes()
             mixed = output / "bad-mixed-rank"
             shutil.copytree(state, mixed)
             name = f"rank-{world - 1}.state"
             shutil.copyfile(donor / name, mixed / name)
-            text = run("reject-mixed-rank", [probe, "load", str(mixed), str(world), str(shard)], False)
+            text = run("reject-mixed-rank", probe_command("load", mixed, world, shard), False)
             assert "incompatible metadata" in text, "did not reject the different checkpoint ID"
+            other = "muon" if args.optimizer == "adam" else "adam"
+            run("reject-different-optimizer", probe_command("load", state, world, 0, other), False)
+            if args.optimizer == "adam":
+                text = run("reject-sharded-adam-save", probe_command("save", output/"invalid-sharded-adam", world, 1), False)
+                assert "Adam requires FP32 and train.distributed_optimizer=0" in text
+                assert not (output/"invalid-sharded-adam").exists()
+                for fault, field, replacement, message in (
+                    ("adam-step-zero", "adam.step", struct.pack("<Q", 0), "Adam step does not match training epoch"),
+                    ("adam-step-overflow", "adam.step", struct.pack("<Q", (1 << 64)-1), "Adam step does not match training epoch"),
+                    ("adam-negative-second", "adam.second_moment", struct.pack("<f", -1), "negative Adam second moment"),
+                    ("adam-nonfinite-first", "adam.first_moment", struct.pack("<f", float("nan")), "nonfinite state in adam.first_moment"),
+                ):
+                    bad = output / ("bad-"+fault)
+                    shutil.copytree(state, bad)
+                    corrupt_adam_state(bad, world-1, field, replacement)
+                    text = run("reject-"+fault, probe_command("load", bad, world, shard), False)
+                    assert message in text, (fault, "did not reach semantic validation", text)
 
     world = args.gpus
     total, half = 256*world, 128*world
@@ -106,7 +187,8 @@ def main():
               "--train.horizon=8", "--train.minibatch_size=16", "--train.learning_rate=0.001",
               "--train.anneal_lr=1", "--train.anneal_ent_coef=1", "--train.replay_ratio=1",
               f"--train.gpus={world}", f"--train.total_timesteps={total}",
-              f"--train.distributed_optimizer={int(world > 1)}", "--base.checkpoint_interval=4",
+              f"--train.optimizer={args.optimizer}",
+              f"--train.distributed_optimizer={int(world > 1 and args.optimizer == 'muon')}", "--base.checkpoint_interval=4",
               f"--base.checkpoint_dir={output}/checkpoints", f"--base.log_dir={output}/logs"]
     run("cli-full", common + ["--base.run_id=full", "--base.save_training_state=1"])
     run("cli-split", common + ["--base.run_id=split", "--base.save_training_state=1",
@@ -160,7 +242,7 @@ def main():
     assert not list(output.glob("checkpoints/**/*.partial")), "successful saves left staging directories"
     (output / "results.json").write_text(json.dumps(outcomes, indent=2)+"\n")
     print(json.dumps(outcomes["split_vs_uninterrupted"], indent=2))
-    print("PASS: exact fresh-process replay, corrupt/incompatible state rejection, trainer resume/warm start")
+    print(f"PASS: {args.optimizer} exact fresh-process replay, corrupt/incompatible state rejection, trainer resume/warm start")
 
 
 if __name__ == "__main__":

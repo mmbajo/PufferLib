@@ -51,10 +51,14 @@ static int checkpoint_worker(TrainContext* ctx,void*,void* user) {
         require(actions==replay,"restored sampler/environment does not reproduce next rollout");
         train_impl(p,nullptr);
         float lr=0;
-        cuda_ok(cudaMemcpy(&lr,p->muon.lr,sizeof(lr),cudaMemcpyDeviceToHost));
+        cuda_ok(cudaMemcpy(&lr,puf_optimizer_lr(p),sizeof(lr),cudaMemcpyDeviceToHost));
         float expected_lr=cosine_annealing(p->hypers.lr,p->hypers.min_lr_ratio*p->hypers.lr,2,8);
         require(lr==expected_lr,"resume restarted learning-rate schedule");
         require(p->epoch==3 && p->global_step==96,"continued counters");
+        if(p->hypers.optimizer==PUF_OPTIMIZER_ADAM) {
+            uint64_t step=0; cuda_ok(cudaMemcpy(&step,p->adam.step,sizeof(step),cudaMemcpyDeviceToHost));
+            require(step==6,"Adam bias-correction step did not continue");
+        }
         float entropy=0;
         cuda_ok(cudaMemcpy(&entropy,p->ppo_bufs.ent_coef,sizeof(entropy),cudaMemcpyDeviceToHost));
         require(entropy==cosine_annealing(p->hypers.ent_coef,
@@ -68,7 +72,7 @@ static int checkpoint_worker(TrainContext* ctx,void*,void* user) {
 }
 int main(int argc,char** argv) {
     try {
-        puf_checkpoint::require(argc>=5,"usage: test_native_checkpoint save|load PATH GPUS SHARD [BUNDLE]");
+        puf_checkpoint::require(argc>=5,"usage: test_native_checkpoint save|load PATH GPUS SHARD [BUNDLE] [--optimizer=adam|muon]");
         CheckpointTest task{}; task.mode=argv[1]; task.path=argv[2];
         puf_checkpoint::require(task.mode=="save" || task.mode=="load","invalid test mode");
         int world=atoi(argv[3]);
@@ -85,12 +89,21 @@ int main(int argc,char** argv) {
         puf_ini_put(&task.ini,"train.total_timesteps",std::to_string(256*world).c_str());
         puf_ini_put(&task.ini,"train.gpus",argv[3]);
         puf_ini_put(&task.ini,"train.distributed_optimizer",argv[4]);
+        const char* bundle=nullptr;
+        for(int i=5;i<argc;++i) {
+            if(!strncmp(argv[i],"--optimizer=",12)) puf_ini_put(&task.ini,"train.optimizer",argv[i]+12);
+            else {
+                puf_checkpoint::require(!bundle,"duplicate/unknown test argument"); bundle=argv[i];
+            }
+        }
 #ifdef PUFFER_DECISION_POLICY
-        puf_checkpoint::require(argc==6,"text test requires bundle");
-        puf_ini_put(&task.ini,"policy.bundle",argv[5]);
+        puf_checkpoint::require(bundle!=nullptr,"text test requires bundle");
+        puf_ini_put(&task.ini,"policy.bundle",bundle);
         puf_ini_put(&task.ini,"policy.sequence_length","384");
         puf_ini_put(&task.ini,"policy.zero_init_critic","1");
         puf_ini_put(&task.ini,"env.observation_format","1");
+#else
+        puf_checkpoint::require(bundle==nullptr,"board test does not take a bundle");
 #endif
         int status=puf_launch_native_ranks(world,0,0,nullptr,checkpoint_worker,&task);
         puf_ini_free(&task.ini); return status==0 ? 0 : 1;
