@@ -13,6 +13,8 @@ Additional text decision environments are [Connect Four](ocean/decision_connect4
 [Lights Out](ocean/decision_lightsout/README.md) and [2048](ocean/decision_2048/README.md).
 Use the [native training benchmark](tools/benchmark_native.md) to measure rollout
 and learner throughput separately from startup, evaluation and checkpoint I/O.
+The [distributed training guide](tools/distributed_training.md) covers multi-GPU
+data parallelism, optional Muon state sharding, and current larger-model limits.
 
 ## Star to puff up the project!
 

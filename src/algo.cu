@@ -1,3 +1,7 @@
+#include <algorithm>
+#include <climits>
+#include <vector>
+
 // PufferNet model API + architecture
 // Writing custom nets in 4.0+ requires a fair bit of code because you are
 // responsible for defining your own activation and gradient buffers.
@@ -1030,12 +1034,20 @@ Arch build_arch(int input_size, int hidden_size,
     };
 }
 
+// Keep the old launch geometry for ordinary models, but never narrow a flat
+// parameter count to int. Grid-stride loops also cover models above INT_MAX.
+static int muon_grid_size(int64_t n, int limit = INT_MAX) {
+    int64_t blocks = n / BLOCK_SIZE + (n % BLOCK_SIZE != 0);
+    return (int)std::min(blocks, (int64_t)limit);
+}
+
 __global__ void muon_sum_sq_partials(float* __restrict__ partials,
-        const precision_t* __restrict__ src, int n) {
+        const precision_t* __restrict__ src, int64_t n) {
     __shared__ float sdata[256];
     int tid = threadIdx.x;
     float sum = 0.0f;
-    for (int i = blockIdx.x * blockDim.x + tid; i < n; i += blockDim.x * gridDim.x) {
+    for (int64_t i = (int64_t)blockIdx.x * blockDim.x + tid; i < n;
+            i += (int64_t)blockDim.x * gridDim.x) {
         float v = to_float(src[i]);
         sum += v * v;
     }
@@ -1054,10 +1066,10 @@ __global__ void muon_sum_sq_reduce(float* __restrict__ out,
 // Global grad clip by L2, then Nesterov into f32 momentum buffer.
 __global__ void muon_clip_nesterov(float* __restrict__ mb,
         precision_t* __restrict__ gc, const float* __restrict__ sum_sq_ptr,
-        float max_norm, float eps, float mu, int n) {
+        float max_norm, float eps, float mu, int64_t n) {
     float clip_coef = fminf(max_norm / (sqrtf(*sum_sq_ptr) + eps), 1.0f);
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
+    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+            idx < n; idx += (int64_t)blockDim.x * gridDim.x) {
         float g = to_float(gc[idx]) * clip_coef;
         float m = mu * mb[idx] + g;
         mb[idx] = m;
@@ -1067,19 +1079,19 @@ __global__ void muon_clip_nesterov(float* __restrict__ mb,
 
 // x *= 1 / max(sqrt(sum_sq), eps)  — NS input normalize
 __global__ void muon_l2_normalize(precision_t* __restrict__ dst,
-        const float* __restrict__ sum_sq_ptr, float eps, int n) {
+        const float* __restrict__ sum_sq_ptr, float eps, int64_t n) {
     float inv_norm = 1.0f / fmaxf(sqrtf(*sum_sq_ptr), eps);
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
+    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+            idx < n; idx += (int64_t)blockDim.x * gridDim.x) {
         dst[idx] = from_float(to_float(dst[idx]) * inv_norm);
     }
 }
 
 // dst = scale * src  (write NS result + aspect scale into flat grad buffer)
 __global__ void muon_store_update(precision_t* __restrict__ dst,
-        const precision_t* __restrict__ src, float scale, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
+        const precision_t* __restrict__ src, float scale, int64_t n) {
+    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+            idx < n; idx += (int64_t)blockDim.x * gridDim.x) {
         dst[idx] = from_float(scale * to_float(src[idx]));
     }
 }
@@ -1087,11 +1099,11 @@ __global__ void muon_store_update(precision_t* __restrict__ dst,
 // wb = wb * (1 - lr*wd) - lr * update  (update already scaled; one call for all params)
 __global__ void muon_weight_update(float* __restrict__ wb,
         const precision_t* __restrict__ update,
-        const float* __restrict__ lr_ptr, float wd, int n) {
+        const float* __restrict__ lr_ptr, float wd, int64_t n) {
     float lr = *lr_ptr;
     float wd_scale = 1.0f - lr * wd;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
+    for (int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+            idx < n; idx += (int64_t)blockDim.x * gridDim.x) {
         wb[idx] = wb[idx] * wd_scale - lr * to_float(update[idx]);
     }
 }
@@ -1106,6 +1118,11 @@ constexpr double ns_coeffs[5][3] = {
 
 // Muon optimizer. Our benchmarks show this is a major
 // upgrade over Adam (weight decay not needed in RL).
+struct MuonParameter {
+    int64_t offset, count, momentum_offset;
+    int owner;
+};
+
 struct Muon {
     double momentum;
     // Scalars / scratch: raw device ptrs. Tensors: allocator.
@@ -1113,32 +1130,107 @@ struct Muon {
     float* grad_norm;
     float* ns_norm;
     float* norm_partials;  // 256
-    Float mb;              // flat momentum buffer (param-sized)
+    Float mb;              // replicated, or packed whole-tensor local momentum
     Prec gram, gram_buf, x_buf;
     Allocator* param_alloc;
+    MuonParameter* parameters;
+    bool distributed_optimizer;
+    int rank, world_size, owned_parameter_count;
+    int64_t momentum_elems, replicated_momentum_elems, scratch_elems;
+    ncclComm_t comm;
 };
 
-void muon_init(Muon* m, Allocator* param_alloc, double momentum, Allocator* alloc) {
-    m->momentum = momentum;
+static void muon_require(bool condition, const char* message) {
+    if (!condition) {
+        fprintf(stderr, "Muon: %s\n", message);
+        exit(EXIT_FAILURE);
+    }
+}
+
+// Host-only deterministic layout: whole tensors remain indivisible so Muon's
+// Newton-Schulz update is identical to replicated training. Largest-first
+// placement balances momentum storage; this is not tensor parallelism.
+static void muon_plan(Muon* m, Allocator* param_alloc, int rank,
+        int world_size, bool distributed_optimizer) {
+    muon_require(world_size > 0 && rank >= 0 && rank < world_size,
+        "invalid data-parallel rank/world size");
     m->param_alloc = param_alloc;
+    m->rank = rank;
+    m->world_size = world_size;
+    m->distributed_optimizer = distributed_optimizer;
+    m->momentum_elems = 0;
+    m->owned_parameter_count = 0;
+    m->replicated_momentum_elems = param_alloc->total_elems;
+    m->parameters = (MuonParameter*)calloc(param_alloc->num_regs, sizeof(MuonParameter));
+    muon_require(m->parameters != NULL, "parameter layout allocation failed");
+    std::vector<int> order(param_alloc->num_regs);
+    int64_t offset = 0;
+    for (int i = 0; i < param_alloc->num_regs; ++i) {
+        AllocEntry& e = param_alloc->regs[i];
+        int64_t ne = numel(e.shape);
+        muon_require(ne > 0 && ne <= INT64_MAX - offset,
+            "invalid or overflowing parameter size");
+        m->parameters[i] = {offset, ne, -1, rank};
+        offset += ne;
+        order[i] = i;
+        if (ndim(e.shape) >= 2) {
+            muon_require(e.shape[0] <= INT_MAX && ne / e.shape[0] <= INT_MAX,
+                "individual matrix dimensions must fit cuBLAS int dimensions");
+        }
+    }
+    muon_require(offset == param_alloc->total_elems,
+        "parameter layout differs from the flat buffer");
+    if (distributed_optimizer) {
+        std::sort(order.begin(), order.end(), [m](int a, int b) {
+            if (m->parameters[a].count != m->parameters[b].count)
+                return m->parameters[a].count > m->parameters[b].count;
+            return a < b;
+        });
+        std::vector<int64_t> loads(world_size, 0);
+        for (int i : order) {
+            int owner = (int)(std::min_element(loads.begin(), loads.end()) - loads.begin());
+            m->parameters[i].owner = owner;
+            loads[owner] += m->parameters[i].count;
+        }
+    }
+    int64_t max_gram = 1, max_x = 1;
+    for (int i = 0; i < param_alloc->num_regs; ++i) {
+        MuonParameter& p = m->parameters[i];
+        if (p.owner != rank) continue;
+        p.momentum_offset = m->momentum_elems;
+        m->momentum_elems += p.count;
+        m->owned_parameter_count++;
+        AllocEntry& e = param_alloc->regs[i];
+        if (ndim(e.shape) >= 2) {
+            int64_t M = std::min(e.shape[0], p.count / e.shape[0]);
+            max_gram = std::max(max_gram, M * M);
+            max_x = std::max(max_x, p.count);
+        }
+    }
+    // numel({0}) is one in the substrate. Explicit one-element allocations keep
+    // empty-owner ranks valid while momentum_elems still reports zero ownership.
+    m->mb = {.shape = {std::max((int64_t)1, m->momentum_elems)}};
+    m->gram = {.shape = {max_gram}};
+    m->gram_buf = {.shape = {max_gram}};
+    m->x_buf = {.shape = {max_x}};
+    m->scratch_elems = 2 * max_gram + max_x;
+}
+
+void muon_init(Muon* m, Allocator* param_alloc, double momentum, Allocator* alloc,
+        int rank = 0, int world_size = 1, ncclComm_t comm = NULL,
+        bool distributed_optimizer = false) {
+    muon_require(!distributed_optimizer || !USE_BF16,
+        "distributed_optimizer currently requires FP32 precision");
+    muon_require(!distributed_optimizer || world_size == 1 || comm != NULL,
+        "distributed_optimizer requires an initialized NCCL communicator");
+    m->momentum = momentum;
+    m->comm = comm;
+    muon_plan(m, param_alloc, rank, world_size, distributed_optimizer);
     cudaMalloc((void**)&m->lr, sizeof(float));
     cudaMalloc((void**)&m->grad_norm, sizeof(float));
     cudaMalloc((void**)&m->ns_norm, sizeof(float));
     cudaMalloc((void**)&m->norm_partials, 256 * sizeof(float));
-    m->mb = {.shape = {param_alloc->total_elems}};
     alloc_register(alloc, &m->mb);
-    long max_M = 0, max_N = 0;
-    for (int _i = 0; _i < param_alloc->num_regs; _i++) {
-        AllocEntry& e = param_alloc->regs[_i];
-        if (ndim(e.shape) >= 2) {
-            long R = e.shape[0], C = numel(e.shape) / R;
-            max_M = max(max_M, min(R, C));
-            max_N = max(max_N, max(R, C));
-        }
-    }
-    m->gram =     {.shape = {max_M, max_M}};
-    m->gram_buf = {.shape = {max_M, max_M}};
-    m->x_buf =    {.shape = {max_M, max_N}};
     alloc_register(alloc, &m->gram);
     alloc_register(alloc, &m->gram_buf);
     alloc_register(alloc, &m->x_buf);
@@ -1146,24 +1238,33 @@ void muon_init(Muon* m, Allocator* param_alloc, double momentum, Allocator* allo
 
 void muon_step(Muon* m, Float weights, Prec grads,
         float max_grad_norm, cudaStream_t stream = 0) {
-    int n_grad = (int)numel(grads.shape);
-    int sum_blocks = min((int)grid_size(n_grad), 256);
+    int64_t n_grad = numel(grads.shape);
+    muon_require(n_grad == m->replicated_momentum_elems && numel(weights.shape) == n_grad,
+        "weight, gradient and parameter counts differ");
+    int sum_blocks = muon_grid_size(n_grad, 256);
     muon_sum_sq_partials<<<sum_blocks, 256, 0, stream>>>(
         m->norm_partials, grads.data, n_grad);
     muon_sum_sq_reduce<<<1, 256, 0, stream>>>(
         m->grad_norm, m->norm_partials, sum_blocks);
-    muon_clip_nesterov<<<grid_size(n_grad), BLOCK_SIZE, 0, stream>>>(
-        m->mb.data, grads.data, m->grad_norm,
-        max_grad_norm, 1e-6f, (float)m->momentum, n_grad);
+    if (!m->distributed_optimizer) {
+        muon_clip_nesterov<<<muon_grid_size(n_grad), BLOCK_SIZE, 0, stream>>>(
+            m->mb.data, grads.data, m->grad_norm,
+            max_grad_norm, 1e-6f, (float)m->momentum, n_grad);
+    }
 
     // Per-param NS into workspace; write scaled update back into flat grads.
     // 1D params already hold their update in-place (scale 1).
-    long offset = 0;
     for (int _i = 0; _i < m->param_alloc->num_regs; _i++) {
         AllocEntry& e = m->param_alloc->regs[_i];
-        precision_t* gc_ptr = grads.data + offset;
-        long ne = numel(e.shape);
-        offset += ne;
+        MuonParameter& p = m->parameters[_i];
+        if (p.owner != m->rank) continue;
+        precision_t* gc_ptr = grads.data + p.offset;
+        int64_t ne = p.count;
+        if (m->distributed_optimizer) {
+            muon_clip_nesterov<<<muon_grid_size(ne), BLOCK_SIZE, 0, stream>>>(
+                m->mb.data + p.momentum_offset, gc_ptr, m->grad_norm,
+                max_grad_norm, 1e-6f, (float)m->momentum, ne);
+        }
         if (ndim(e.shape) < 2) {
             continue;
         }
@@ -1176,13 +1277,13 @@ void muon_step(Muon* m, Float weights, Prec grads,
         Prec gram = {.data = m->gram.data, .shape = {M, M}};
         Prec gram_buf = {.data = m->gram_buf.data, .shape = {M, M}};
 
-        int nblk = min((int)grid_size(ne), 256);
+        int nblk = muon_grid_size(ne, 256);
         muon_sum_sq_partials<<<nblk, 256, 0, stream>>>(
-            m->norm_partials, x.data, (int)ne);
+            m->norm_partials, x.data, ne);
         muon_sum_sq_reduce<<<1, 256, 0, stream>>>(
             m->ns_norm, m->norm_partials, nblk);
-        muon_l2_normalize<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
-            x.data, m->ns_norm, 1e-7f, (int)ne);
+        muon_l2_normalize<<<muon_grid_size(ne), BLOCK_SIZE, 0, stream>>>(
+            x.data, m->ns_norm, 1e-7f, ne);
 
         // 5 steps land in x_buf. 4 = you break it.
         for (int i = 0; i < 5; ++i) {
@@ -1206,10 +1307,23 @@ void muon_step(Muon* m, Float weights, Prec grads,
             }
         }
         float scale = sqrtf(fmaxf(1.0f, (float)R / (float)C));
-        muon_store_update<<<grid_size(ne), BLOCK_SIZE, 0, stream>>>(
-            gc_ptr, x_buf.data, scale, (int)ne);
+        muon_store_update<<<muon_grid_size(ne), BLOCK_SIZE, 0, stream>>>(
+            gc_ptr, x_buf.data, scale, ne);
     }
-    muon_weight_update<<<grid_size(n_grad), BLOCK_SIZE, 0, stream>>>(
+    if (m->distributed_optimizer && m->world_size > 1) {
+        // Compute all owned matrices before communication so ranks can run
+        // their Newton-Schulz work concurrently. Every rank submits the same
+        // collective sequence, including ranks with no owned tensors.
+        muon_require(ncclGroupStart() == ncclSuccess, "NCCL broadcast group start failed");
+        for (int i = 0; i < m->param_alloc->num_regs; ++i) {
+            const MuonParameter& p = m->parameters[i];
+            precision_t* update = grads.data + p.offset;
+            muon_require(ncclBroadcast(update, update, (size_t)p.count, NCCL_PRECISION,
+                p.owner, m->comm, stream) == ncclSuccess, "NCCL update broadcast failed");
+        }
+        muon_require(ncclGroupEnd() == ncclSuccess, "NCCL broadcast group end failed");
+    }
+    muon_weight_update<<<muon_grid_size(n_grad), BLOCK_SIZE, 0, stream>>>(
         weights.data, grads.data, m->lr, 0.0f, n_grad);
 }
 
