@@ -139,6 +139,24 @@ applied to the option policy. A new value head supplies Puffer's critic. The
 imported act/escalate head remains available for typed inference; this Snake PPO
 task supplies no act-head supervision.
 
+The exact instruction is:
+
+```text
+Choose the next move. Eat food and avoid the walls and snake body.
+```
+
+The four options, in action-index order, are `Move up`, `Move down`, `Move left`
+and `Move right`. The state explains that rows run top to bottom and columns
+left to right, with `0=empty`, `-1=food`, `1=head`, `2=neck`, and larger integers
+ordering the remaining body toward the tail. It then supplies the current step,
+episode cap and all ten comma-separated board rows. The model receives this
+question/options sequence on every decision; it does not generate a text answer.
+
+Use the [paired Snake evaluator](../../tools/evaluate_snake_learning.md) to
+compare the imported and trained policies on matched episodes. Food collected
+is its primary outcome; survival, raw reward and termination rates are reported
+separately.
+
 ```sh
 ./build.sh decision_laya
 ./build/puffer_decision_laya train --policy.bundle=bundles/laya

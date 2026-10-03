@@ -17,6 +17,8 @@ The [distributed training guide](tools/distributed_training.md) covers multi-GPU
 data parallelism, optional Muon state sharding, and current larger-model limits.
 Use [paired CartPole evaluation](tools/evaluate_decision_learning.md) to compare
 policy quality before and after training on explicitly matched episode seeds.
+For the text Snake adapter, [paired Snake evaluation](tools/evaluate_snake_learning.md)
+measures food collected, returns and survival on matched episodes.
 
 ## Star to puff up the project!
 
