@@ -142,6 +142,40 @@ class SnakeComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'duplicate JSON key'):
             comparison.load(path)
 
+    def test_native_board_greedy_and_random_protocols_are_admitted(self):
+        for sampling, mode in comparison.SAMPLING_MODES.items():
+            path = self.fixture(mode, changed=lambda rows: rows[0].update(
+                environment='decision_snake', bundle='', sampling=sampling,
+                sampling_mode=mode, padded_tokens=101, bundle_max_tokens=101,
+                model='board_transformer', zero_init_critic=False, observation_format=0))
+            comparison.load(path)
+        bad = self.fixture('mixed-mode', changed=lambda rows: rows[0].update(sampling_mode='greedy'))
+        with self.assertRaisesRegex(ValueError, 'sampling mode'):
+            comparison.load(bad)
+
+    def test_treatments_require_explicit_declaration_and_are_recorded(self):
+        before = self.fixture('control', changed=lambda rows: rows[0].update(observation_format=0))
+        after = self.fixture('coordinate-treatment', changed=lambda rows: rows[0].update(observation_format=1))
+        with self.assertRaisesRegex(ValueError, 'protocols differ'):
+            comparison.compare(before, after, resamples=1000)
+        result = comparison.compare(before, after, resamples=1000,
+                                    allow_protocol_differences=['observation_format'])
+        self.assertEqual(result['protocol_differences'], {'observation_format': {'before': 0, 'after': 1}})
+        self.assertEqual(result['declared_treatment_fields'], ['observation_format'])
+        self.assertEqual(result['after_protocol']['observation_format'], 1)
+        self.assertEqual(result['mean_food_score_change'], 0)
+
+    def test_treatment_cannot_waive_pairing_or_game_rules(self):
+        path = self.fixture('valid')
+        for field in ('environment_seed_base', 'action_seed_base', 'model_init_seed',
+                      'max_steps', 'mask_rule', 'episode_offset', 'episodes', 'batch'):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'permitted treatment'):
+                comparison.compare(path, path, resamples=1000, allow_protocol_differences=[field])
+        other = self.fixture('unpaired', changed=lambda rows: rows[1].update(action_seed=1))
+        with self.assertRaisesRegex(ValueError, 'action_seed'):
+            comparison.compare(path, other, resamples=1000,
+                               allow_protocol_differences=['observation_format'])
+
     def test_food_reward_and_terminal_accounting_rejected(self):
         for key, value, message in (
             ('food_score', True, 'length/food'), ('food_score', -1, 'length/food'),

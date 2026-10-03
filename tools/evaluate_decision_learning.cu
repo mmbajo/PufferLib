@@ -145,12 +145,15 @@ int main(int argc, char** argv) {
                "\"bundle\":%s,\"checkpoint\":%s,\"episodes\":%llu,\"episode_offset\":%llu,"
                "\"batch\":%d,\"model_init_seed\":%llu,\"environment_seed_base\":%llu,\"action_seed_base\":%llu,"
                "\"sampling\":\"puffer_philox_categorical\",\"max_steps\":%d,\"temperature\":%.9g,"
-               "\"padded_tokens\":%d,\"params\":%ld,\"cart_mass\":%.9g,\"pole_mass\":%.9g,"
+               "\"padded_tokens\":%d,\"bundle_max_tokens\":%d,\"zero_init_critic\":%s,"
+               "\"params\":%ld,\"cart_mass\":%.9g,\"pole_mass\":%.9g,"
                "\"pole_length\":%.9g,\"gravity\":%.9g,\"force_mag\":%.9g,\"dt\":%.9g}\n",
                eval_json(decision_policy_context->path).c_str(), eval_json(checkpoint).c_str(),
                (unsigned long long)episodes, (unsigned long long)offset, B, (unsigned long long)model_init_seed,
                (unsigned long long)env_seed, (unsigned long long)action_seed, envs[0].max_steps,
-               decision_policy_context->temperature, decision_policy_context->bundle.max_len,
+               decision_policy_context->temperature, decision_policy_context->execution_tokens,
+               decision_policy_context->bundle.max_len,
+               decision_policy_context->zero_init_critic ? "true" : "false",
                parameter_alloc.total_elems, envs[0].cart_mass, envs[0].pole_mass,
                envs[0].pole_length, envs[0].gravity, envs[0].force_mag, envs[0].tau);
         int next = B, complete = 0;

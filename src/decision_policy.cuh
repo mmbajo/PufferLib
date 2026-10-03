@@ -14,6 +14,7 @@ static_assert(sizeof(decision_policy_action_sizes) / sizeof(int) == 1 &&
 
 struct DecisionPolicyWeights {
     pretrained::DecisionConfig config;
+    bool zero_init_critic;
     std::vector<pretrained::Parameter> registry;
     std::vector<Prec> parameters;
 };
@@ -72,6 +73,7 @@ static __global__ void decision_policy_unpack(const float* input, float* logits,
 static void* decision_policy_weights(void*) {
     auto* weights = new DecisionPolicyWeights;
     weights->config = decision_policy_context->config;
+    weights->zero_init_critic = decision_policy_context->zero_init_critic;
     weights->registry = pretrained::decision_parameter_specs(weights->config);
     for (const auto& p : weights->registry) {
         Prec tensor{};
@@ -98,13 +100,18 @@ static void decision_policy_initialize(void* opaque, ulong* seed, cudaStream_t s
     for (size_t i = 0; i < registry.size(); ++i) {
         auto& p = registry[i]; p.data = w->parameters[i].data;
         cuda_check(cudaMemsetAsync(p.data, 0, numel(w->parameters[i].shape) * sizeof(float), stream));
-        bool fresh = p.name.compare(0, 11, "value_head.") == 0 ||
+        bool critic = p.name.compare(0, 11, "value_head.") == 0;
+        bool fresh = critic ||
             (decision_policy_context->bundle.kind == "encoder" && p.name.compare(0, 8, "encoder.") != 0);
         if (!fresh) continue;
         std::vector<float> values(p.count);
         bool bias = p.name.size() >= 4 && p.name.compare(p.name.size() - 4, 4, "bias") == 0;
         bool norm = p.name.find("norm") != std::string::npos || p.name == "scorer.0.weight";
         for (float& value : values) value = bias ? 0 : norm ? 1 : normal(rng);
+        // Consume exactly the historical RNG sequence before this opt-in
+        // override, so every imported/fresh policy parameter remains identical.
+        if (critic && w->zero_init_critic)
+            for (float& value : values) value = 0;
         cuda_check(cudaMemcpyAsync(p.data, values.data(), p.count * sizeof(float), cudaMemcpyHostToDevice, stream));
         cuda_check(cudaStreamSynchronize(stream));
     }
@@ -114,7 +121,7 @@ static void decision_policy_register_common(void* opaque, void* activations,
         Allocator* acts, Allocator* grads, int B) {
     auto* w = static_cast<DecisionPolicyWeights*>(opaque);
     auto* a = static_cast<DecisionPolicyActivations*>(activations);
-    int T = decision_policy_context->bundle.max_len;
+    int T = decision_policy_context->execution_tokens;
     a->workspace = new DecisionPolicyWorkspace;
     a->workspace->model = new pretrained::DecisionModel(w->config, B, T, DECISION_ACTIONS, nullptr, grads != nullptr, false);
     a->ids = {.shape = {B, T}}; alloc_register(acts, &a->ids);
@@ -147,7 +154,7 @@ static Prec decision_policy_forward(void* opaque, void* activations, Prec input,
         model->bind_parameters(data, gradients); a->workspace->bound = true;
     }
     model->set_stream(stream);
-    int B = numel(input.shape) / OBS_SIZE, T = decision_policy_context->bundle.max_len;
+    int B = numel(input.shape) / OBS_SIZE, T = decision_policy_context->execution_tokens;
     decision_policy_decode<<<grid_size(B * T), BLOCK_SIZE, 0, stream>>>(input.data,
         a->ids.data, a->mask.data, a->markers.data, a->marker_mask.data, a->qtype.data,
         B, T, decision_policy_context->bundle.pad_id);

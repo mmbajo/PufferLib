@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Build the inference-only native Snake paired-evaluation runner.
+# Build native decision initialization/padding regression checks.
 set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ $# -gt 1 ]]; then echo "Usage: $0 [OUT]" >&2; exit 2; fi
-eval_env="${PUFFER_EVAL_ENV:-decision_laya}"
-case "$eval_env" in decision_laya|decision_snake) ;; *) echo "PUFFER_EVAL_ENV must be decision_laya or decision_snake" >&2; exit 2 ;; esac
-out="${1:-$root/build/evaluate_snake_learning}"
+eval_env=decision_laya
+out="${1:-$root/build/test_decision_policy_options}"
 cuda="${CUDA_HOME:-${CUDA_PATH:-}}"
 nvcc="${CUDACXX:-${cuda:+$cuda/bin/nvcc}}"
 nvcc="$(command -v "${nvcc:-nvcc}" || true)"
@@ -58,11 +57,11 @@ if [[ "$eval_env" == decision_laya ]]; then
     objects+=("$archive")
 fi
 mkdir -p -- "$(dirname -- "$out")"
-temporary="$(mktemp -d "$(dirname -- "$out")/.snake-eval-build.XXXXXX")"
+temporary="$(mktemp -d "$(dirname -- "$out")/.decision-options-build.XXXXXX")"
 trap 'rm -rf -- "$temporary"' EXIT
 "${CC:-cc}" -std=c11 -O2 -c "$root/vendor/cJSON.c" -o "$temporary/json.o"
 "${CC:-cc}" -std=c11 -O2 -c "$root/ocean/decision_snake/engine/snake.c" -o "$temporary/snake.o"
-"$nvcc" "${flags[@]}" "$root/tools/evaluate_snake_learning.cu" \
+"$nvcc" "${flags[@]}" "$root/tests/test_decision_policy_options.cu" \
     "${objects[@]}" "$temporary/json.o" "$temporary/snake.o" "${libraries[@]}" -o "$temporary/test"
 mv -- "$temporary/test" "$out"
-echo "Built $out ($eval_env; --sampling=sampled|greedy|random; --weights=FLAT or --pufdt=NAMED for board builds)"
+echo "Built $out"

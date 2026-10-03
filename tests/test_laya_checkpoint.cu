@@ -13,8 +13,23 @@ struct Changes {
 
 int main(int argc, char** argv) {
     try {
-        if (argc < 3 || argc > 4)
-            throw std::invalid_argument("usage: test_laya_checkpoint BUNDLE PUFFER_CHECKPOINT [INITIAL_SEED=73]");
+        if (argc < 3 || argc > 5)
+            throw std::invalid_argument("usage: test_laya_checkpoint BUNDLE PUFFER_CHECKPOINT [INITIAL_SEED=73] [--zero-init-critic]");
+        uint64_t initial_seed = 73;
+        bool zero_init_critic = false, have_seed = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::string(argv[i]) == "--zero-init-critic") {
+                if (zero_init_critic) throw std::invalid_argument("duplicate --zero-init-critic");
+                zero_init_critic = true;
+            } else {
+                if (have_seed) throw std::invalid_argument("duplicate initial seed");
+                size_t consumed = 0;
+                initial_seed = std::stoull(argv[i], &consumed);
+                if (consumed != strlen(argv[i]) || argv[i][0] == '-')
+                    throw std::invalid_argument("invalid initial seed");
+                have_seed = true;
+            }
+        }
         pretrained::Bundle bundle(argv[1]);
         pretrained::DecisionConfig config{bundle.encoder, bundle.head_layers, bundle.n_act, true};
         auto registry = pretrained::decision_parameter_specs(config);
@@ -28,7 +43,7 @@ int main(int argc, char** argv) {
         if (!input || input.tellg() < 0 || static_cast<size_t>(input.tellg()) != expected)
             throw std::runtime_error("checkpoint size differs from padded native registry");
         input.seekg(0);
-        std::mt19937_64 rng(argc == 4 ? std::stoull(argv[3]) : 73);
+        std::mt19937_64 rng(initial_seed);
         std::normal_distribution<float> normal(0, 0.02f);
         std::map<std::string, Changes> groups;
         for (const auto& p : registry) {
@@ -39,6 +54,8 @@ int main(int argc, char** argv) {
                 bool bias = p.name.size() >= 4 && p.name.compare(p.name.size() - 4, 4, "bias") == 0;
                 bool norm = p.name.find("norm") != std::string::npos || p.name == "scorer.0.weight";
                 for (auto& value : before) value = bias ? 0 : norm ? 1 : normal(rng);
+                if (critic && zero_init_critic)
+                    for (auto& value : before) value = 0;
             }
             size_t padded = (p.count + 3) & ~size_t(3);
             std::vector<float> after(padded);

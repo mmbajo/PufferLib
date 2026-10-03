@@ -1,9 +1,9 @@
 # Paired native Snake learning evaluation
 
-This runner evaluates imported Transformer policies through the existing
-`decision_laya` Snake adapter. It uses the native campaign Snake engine,
-serialized board, calibrated decision logits, reverse-only action mask and
-Puffer categorical sampler. It allocates inference weights and workspaces;
+This runner evaluates imported text policies through `decision_laya` or numeric
+board policies through `decision_snake`. Both use the native campaign Snake
+engine and reverse-only action mask. Sampled, greedy and uniform-random action
+modes are explicit. The runner allocates inference weights and workspaces;
 there are no PPO or optimizer updates during evaluation.
 
 **Food eaten is the primary metric.** Living longer without eating can improve
@@ -37,19 +37,60 @@ critic and, for encoder-only imports, fresh decision heads. The critic is loaded
 but does not select evaluation actions. Keep the initialization seed fixed.
 
 Build requirements follow the native decision backend: CUDA/cuBLAS/NCCL,
-Raylib from an existing `./build.sh decision_laya` build, and the tokenizer static
+Raylib from an existing native build, and, for text policies, the tokenizer static
 library built with Rust. Set `CUDA_HOME` or `CUDACXX` and optionally `NVCC_ARCH`;
 the helper also accepts an output executable path. The executable requires no
 Python runtime. Python's standard library is used only for paired statistical
 analysis. Ordinary configuration overrides, including `--base.gpu_offset`,
 remain available.
 
-## Unchanged observation and decision interface
+## Action modes and board checkpoint imports
+
+`--sampling=sampled` is the default. It uses Puffer's categorical sampler and
+the per-episode Philox state. `--sampling=greedy` selects the first legal action
+with the largest logit; ties follow the fixed up/down/left/right index order.
+`--sampling=random` supplies zero logits to the same categorical sampler, giving
+uniform legal-action probabilities and skipping policy forward computation.
+Random mode accepts neither `--weights` nor `--pufdt`. All three modes retain
+collision actions and the same environment dynamics. All require a GPU.
+
+Build a separate executable for the numeric board policy:
+
+```sh
+PUFFER_EVAL_ENV=decision_snake ./tools/build_evaluate_snake_learning.sh \
+    build/evaluate_snake_board
+
+# Export a supported decisions/PyTorch checkpoint offline, then evaluate natively.
+python tools/export_decision.py /path/to/policy.pt build/reference.pufdt
+./build/evaluate_snake_board --pufdt=build/reference.pufdt --sampling=greedy \
+    --base.seed=73 --episodes=1024 --batch=16 \
+    --env-seed=670001 --action-seed=770001 --env.max_steps=500 > board.jsonl
+
+# Matched random control: same episodes, seeds, cap and batch.
+./build/evaluate_snake_board --sampling=random --base.seed=73 \
+    --episodes=1024 --batch=16 --env-seed=670001 --action-seed=770001 \
+    --env.max_steps=500 > random.jsonl
+```
+
+The board build accepts either `--weights=FILE` for Puffer's flat parameter
+layout or `--pufdt=FILE` for named `PUFDT01` tensors, never both. PUFDT supplies
+the architecture, including CLS/head readout and absolute/head-relative
+coordinates, and validates names, shapes and finite values before loading.
+Tail-distance features are unsupported. A flat board checkpoint requires the
+matching width/layer configuration and current native board architecture.
+Text bundles and PUFDT are separate formats; `--pufdt` is rejected by the text
+build. See the [board import guide](../ocean/decision_snake/README.md#offline-reference-checkpoint-conversion).
+
+Sampled and greedy scores answer different questions. Freeze the mode before
+evaluation and compare like modes for a policy-improvement claim. Explicitly
+label a model-versus-random or sampled-versus-greedy comparison as such.
+
+## Observation and decision interface
 
 The evaluator calls
 [`decision_laya_encode`](../ocean/decision_laya/decision_laya.h) through the same
-observation path as native training. Its state text begins exactly as follows,
-with the current step and configured cap substituted:
+observation path as native training. With default `env.observation_format=0`,
+its state text begins as follows, with the current step and cap substituted:
 
 ```text
 Snake on a 10 by 10 grid. Rows run top to bottom; columns left to right. 0=empty, -1=food, 1=head, 2=neck, larger numbers follow the body toward the tail. Step 0 of 500. Board:
@@ -77,12 +118,28 @@ respectively, and one seeded food location. The initial mask is `[1, 1, 0, 1]`.
 Only reversal into the neck is prohibited. Directions that collide with a wall
 or body remain legal to sample; this evaluator does not add a safety planner.
 The normal engine rule permits entry into the tail cell when that cell vacates.
-Packing, tokenizer behavior, temperature calibration, rewards and dynamics are
-unchanged. The imported bundle controls the token budget; no shorter prompt,
-new shaping reward or greedy action selection is introduced. With the published
-Laya bundle and tokenizer, inspected initial observations occupy **289 of 512
-tokens**. This is a measured initial-state length, not a fixed length for every
-board later in an episode.
+
+`--env.observation_format=1` prepends observed zero-based head/food coordinates
+and signed food-minus-head row/column offsets, then retains the complete grid
+and the same question/options. The first held-out episode in the example uses:
+
+```text
+Coordinates are zero-based (row, column). Head: (5, 5). Food: (5, 2). Food minus head: row +0, column -3. Negative row=up; positive row=down; negative column=left; positive column=right.
+```
+
+A full board reports `Food: none.` without offsets. This representation supplies
+no recommended action or new legality rule. The numeric board build does not
+use this text setting.
+
+Imported policies also accept `--policy.zero_init_critic=1` for initialization
+of the new critic and `--policy.sequence_length=N` for a reduced execution
+padding length. Both default to `0`; sequence length `0` uses bundle `max_len`.
+Packing and calibration still come from the bundle. An observation exceeding
+the execution budget fails rather than losing state tokens. The same flat
+checkpoint layout works at different supported execution lengths; finite
+precision can still change predictions. Loading weights restores the saved
+critic regardless of its initialization setting. See the
+[training controls](../ocean/decision_laya/README.md#fine-tune-through-puffer).
 
 ## Episode identity and recorded outcomes
 
@@ -100,10 +157,14 @@ seeds do not establish generalization to unseen initial states.
 The protocol records the bundle/checkpoint paths, episode and seed settings,
 model initialization seed, inference batch, cap, padded token count, parameter
 count, temperature, grid size, action count, sampling method and reverse-only
-mask rule. Per-episode rows contain actual seeds, the initial ordered 100-cell
+mask rule. It also records model/representation, observation format, critic
+initialization, execution and bundle token budgets, pooling and coordinates.
+Per-episode rows contain actual seeds, the initial ordered 100-cell
 board and action mask, food score, raw return, length, action counts, average
-masked action probabilities, outcome and boundary flags. The summary reports
-means, food-score standard error, ending counts and inference-loop time.
+masked action probabilities, outcome and boundary flags. In greedy mode those
+probabilities are the executed one-hot distribution, not the model's softmax.
+The summary reports means, food-score standard error, ending counts and
+inference-loop time.
 
 | Event | Step reward | Outcome | Boundary behavior |
 | --- | ---: | ---: | --- |
@@ -124,11 +185,32 @@ before recording it and starting the next explicitly seeded episode.
 Floating-point inference can vary with cuBLAS batch shape. Initial seeds and
 boards are independent of batching, but a small probability change can alter a
 sampled action. Use the **same batch size** for the primary before/after
-comparison. The comparator requires identical complete protocols except for
-the checkpoint path, including the bundle path, initialization seed and batch.
+comparison. By default the comparator requires identical complete protocols
+except for the checkpoint path, including bundle, initialization seed and batch.
 It rejects missing/duplicate episodes, changed seeds/initial boards/masks,
 invalid action probabilities or counts, inconsistent terminal/reward accounting
 and summaries that disagree with the raw episode rows.
+
+An intentional ablation must declare each changed treatment field explicitly.
+For example, changing the text format also changes its representation label:
+
+```sh
+python3 tools/compare_snake_learning.py grid.jsonl coordinates.jsonl \
+    --allow-protocol-difference=observation_format \
+    --allow-protocol-difference=representation \
+    --output=representation-comparison.json
+```
+
+Only the model, representation, initialization option, execution token budget,
+calibration and sampler fields listed in `--help` are eligible. The comparator
+records both complete protocols, every actual difference, and the declared
+allowances. It never waives matching episode IDs/counts, environment/action
+seeds, model initialization seed, initial boards/masks, batch size, cap, action
+space or game rules. A sampler treatment normally requires both `sampling` and
+`sampling_mode`; a cross-model comparison may require several model fields.
+Use allowances to describe a planned comparison, not to relabel unlike runs
+as a controlled test of one change. Older records without the new metadata are
+still readable, but mixing old/new records does not silently infer equivalence.
 
 ## Interpreting the comparison
 

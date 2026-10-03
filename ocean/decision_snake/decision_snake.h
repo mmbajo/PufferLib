@@ -2,6 +2,8 @@
 #define PUFFER_DECISION_SNAKE_H
 
 #include <limits.h>
+#include <errno.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +59,7 @@ struct Env {
     unsigned int rng; // Initial instance seed supplied by PufferLib.
     IBSnake* snake;
     int max_steps;
+    int observation_format; // Text adapter setting; numeric board observations ignore it.
     uint32_t episode_seed;
     uint32_t next_seed;
     DecisionSnakeTransition transition;
@@ -159,13 +162,29 @@ int decision_snake_step(Env* env, int action) {
 void puf_init(Env* env, Dict* kwargs) {
     double max_steps = dict_get(kwargs, "max_steps");
     DictItem* agents = dict_find(kwargs, "num_agents");
+    DictItem* format = dict_find(kwargs, "observation_format");
+    double observation_format = format ? format->value : 0;
+    int format_valid = !format || format->len == 0;
+    if (format && format->str) {
+        char* end = NULL;
+        errno = 0;
+        observation_format = strtod(format->str, &end);
+        format_valid = format_valid && end != format->str && errno != ERANGE;
+        while (end && isspace((unsigned char)*end)) ++end;
+        format_valid = format_valid && end && !*end;
+    }
     if (!(max_steps >= 1 && max_steps <= INT_MAX) ||
             max_steps != (double)(int)max_steps || (agents && agents->value != 1)) {
         fprintf(stderr, "decision_snake: max_steps must be a positive int32; num_agents must be 1\n");
         exit(1);
     }
+    if (!format_valid || (observation_format != 0 && observation_format != 1)) {
+        fprintf(stderr, "decision_snake: observation_format must be 0 or 1\n");
+        exit(1);
+    }
     env->num_agents = 1;
     env->max_steps = (int)max_steps;
+    env->observation_format = (int)observation_format;
     env->episode_seed = (uint32_t)env->rng;
     env->next_seed = env->episode_seed;
     env->agents[0].policy = 0;

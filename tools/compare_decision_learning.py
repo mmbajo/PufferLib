@@ -25,6 +25,22 @@ def load(path):
     if len(protocols) != 1 or len(summaries) != 1:
         raise ValueError(f'{path}: require one complete protocol and summary')
     protocol, summary = protocols[0], summaries[0]
+    # Older default-only records remain readable. When present, effective
+    # execution/initialization controls must be valid and participate in the
+    # complete-protocol comparison below; missing values are never inferred.
+    if 'padded_tokens' in protocol:
+        tokens = protocol['padded_tokens']
+        if type(tokens) is not int or tokens < 1:
+            raise ValueError(f'{path}: padded_tokens must be a positive integer')
+    if 'bundle_max_tokens' in protocol:
+        maximum = protocol['bundle_max_tokens']
+        if (type(maximum) is not int or maximum < 1 or 'padded_tokens' not in protocol
+                or maximum < protocol['padded_tokens']):
+            raise ValueError(f'{path}: invalid bundle_max_tokens or execution length exceeds it')
+    if 'zero_init_critic' in protocol:
+        flag = protocol['zero_init_critic']
+        if not (type(flag) is bool or type(flag) is int and flag in (0, 1)):
+            raise ValueError(f'{path}: zero_init_critic must be a boolean flag')
     if len(episodes) != protocol['episodes'] or len(episodes) != summary['episodes']:
         raise ValueError(f'{path}: episode count differs from requested/completed count')
     keyed = {r['episode']: r for r in episodes}
