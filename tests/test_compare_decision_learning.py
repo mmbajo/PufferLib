@@ -38,6 +38,22 @@ class ComparisonTests(unittest.TestCase):
         path.write_text('\n'.join(json.dumps(r) for r in records)+'\n')
         return path
 
+    def test_precision_is_recorded_and_mixed_modes_rejected(self):
+        before = self.fixture('fp32-before', [4, 12],
+            changed=lambda rows: rows[0].update(gemm_precision='fp32'))
+        explicit_fp32 = self.fixture('fp32', [4, 12],
+            changed=lambda rows: rows[0].update(gemm_precision='fp32'))
+        tf32 = self.fixture('tf32', [4, 12],
+            changed=lambda rows: rows[0].update(gemm_precision='tf32'))
+        result = comparison.compare(before, explicit_fp32, resamples=1000)
+        self.assertEqual(result['protocol']['gemm_precision'], 'fp32')
+        self.assertEqual(result['mean_length_change'], 0)
+        self.assertEqual(comparison.compare(tf32, tf32, resamples=1000)['mean_length_change'], 0)
+        for before, after in ((before, tf32), (tf32, explicit_fp32)):
+            with self.assertRaisesRegex(ValueError, 'protocols differ'):
+                comparison.compare(before, after, resamples=1000)
+
+
     def test_identical_checkpoint_has_exact_zero_paired_change(self):
         before = self.fixture('before', [4, 12, 27, 200])
         result = comparison.compare(before, before, resamples=1000)

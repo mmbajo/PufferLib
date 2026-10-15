@@ -10,6 +10,10 @@ static void host_options() {
     puf_ini_set(puf_ini_section(&ini, "policy", 1), "bundle", "unused");
     puf_ini_set(puf_ini_section(&ini, "policy", 1), "zero_init_critic", "0");
     puf_ini_set(puf_ini_section(&ini, "policy", 1), "sequence_length", "0");
+    pretrained::DecisionConfig typed;
+    typed.encoder.gemm_precision = pretrained::GemmPrecision::TF32;
+    require(pretrained::head_config(typed).gemm_precision == pretrained::GemmPrecision::TF32,
+        "Laya Transformer head did not inherit GEMM precision");
     for (const char* value : {"0", "1", "1.0"}) {
         puf_ini_put(&ini, "policy.zero_init_critic", value);
         require(decision_policy_integer_option(&ini, "zero_init_critic", 1) == atoi(value),

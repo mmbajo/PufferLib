@@ -42,6 +42,12 @@ checkpoint restores its saved critic. Old default-only JSONL files remain
 readable, but comparisons reject missing or different control metadata rather
 than assuming equivalent settings.
 
+`--policy.gemm_precision=fp32` is the default; `tf32` permits TF32 matrix
+multiplication while retaining FP32 storage on supported GPUs. The protocol
+records the selected `gemm_precision`. The comparator compares that field directly
+and rejects comparisons between FP32 and TF32 evaluation. Keep both evaluations
+in FP32 when comparing policies trained with different arithmetic settings.
+
 For episode identifier `i`, the initial environment RNG seed is
 `env_seed + i` and the action-sampler Philox seed is `action_seed + i`, with
 subsequence and offset zero. These seeds are reset independently for every

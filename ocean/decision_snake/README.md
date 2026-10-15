@@ -2,7 +2,8 @@
 
 `decision_snake` wraps the pinned C Snake engine used by the Transformer decision
 experiments. It is a separate environment from PufferLib's stock `snake`.
-The [engine source and license](engine/SOURCE.md) retain their original bytes.
+The [engine provenance and license](engine/SOURCE.md) document the pinned gameplay
+code and the appended state serialization API.
 
 Training advances synchronously: observe the board, compute an action, then step
 the C environment once. Time spent computing the action never advances the game.
@@ -30,8 +31,9 @@ evaluation and the legacy `--profile` kernel harness are unsupported for this
 Transformer. `--cu` selects GPU environments in PufferLib and does not apply here:
 the environment remains C, while policy computation and training run on CUDA.
 
-This is PufferLib's native rollout collector, PPO loss, Muon optimizer, logging,
-and checkpoint path. The policy is a bidirectional Transformer with four attention
+This uses PufferLib's native rollout collector, PPO loss, logging and checkpoint
+path. The optimizer defaults to Muon; [Adam can be selected explicitly](../../tools/native_optimizers.md).
+The policy is a bidirectional Transformer with four attention
 heads, head pooling, head-relative coordinate embeddings, and an ordered body
 embedding. A stateless policy stage replaces MinGRU. `policy.hidden_size` controls
 Transformer width and `policy.num_layers` controls its depth.
@@ -42,8 +44,9 @@ training timesteps. Other optimization settings remain PufferLib's defaults;
 this is not a reproduction of the Python campaign's optimizer or training recipe.
 `base.async=0` and `base.cudagraphs=-1` are currently required. The example above
 overrides the duration for a short smoke run; omit that option for the configured
-duration. Native checkpoints contain policy weights, not complete optimizer and
-environment state for an exact continuation.
+duration. Flat `.bin` checkpoints contain policy weights. Opt into complete
+training state with `base.save_training_state=1`; see
+[warm starts and training resumes](../../tools/native_training_checkpoints.md).
 
 Flat checkpoints also omit architecture metadata. If training changes
 `--policy.hidden_size` or `--policy.num_layers`, pass the same settings to `eval`;
@@ -118,6 +121,21 @@ The log reports food as `score`, total reward as `episode_return`, and
 `perf = score / 97`. `terminated` and `truncated` count their respective completed
 episodes. All fields accumulate until the existing PufferLib log reducer reads
 and clears them.
+
+The adapter defines `PUF_ENV_STATE` and the state size, save, validate, apply and
+discard callbacks. Its version 2 little-endian record is 520 bytes: the 472-byte
+engine record, the accumulated log and the next episode seed. Validation decodes
+once into temporary state, checks engine domains and log ranges, and leaves the
+live environment unchanged. The training loader applies that state only after
+all ranks validate successfully; abandoned decoded states are discarded.
+
+The collector separately saves device observations and timeout buffers. The
+next environment step replaces the host transition and Agent buffers before they
+are consumed, so those copies are not part of the environment record. Bindings,
+configuration and rendering resources stay with the receiving instance. The
+outer training metadata requires the same configuration and diagnoses version 1
+checkpoints with `feat/typed-supervision at 148add30`. Earlier unpublished version
+2 review records used a larger layout and are not supported by this reader.
 
 ## Training boundary
 

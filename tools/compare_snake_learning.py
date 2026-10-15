@@ -13,7 +13,7 @@ from pathlib import Path
 TREATMENT_FIELDS = frozenset(('environment', 'bundle', 'model', 'representation',
     'observation_format', 'zero_init_critic', 'padded_tokens', 'bundle_max_tokens',
     'pooling', 'coordinates', 'model_width', 'model_layers', 'params',
-    'temperature', 'sampling', 'sampling_mode'))
+    'temperature', 'sampling', 'sampling_mode', 'gemm_precision'))
 def require(condition, message):
     if not condition:
         raise ValueError(message)
