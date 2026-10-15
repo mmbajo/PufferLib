@@ -46,6 +46,12 @@ The default uses one environment, horizon 4, minibatch 4 and learning rate
 learning recipe. Use `--env.max_steps=N` to change the default 200-step limit;
 `continuous=1` is rejected by this discrete decision adapter.
 
+For multiple GPUs, see the [distributed training guide](../../tools/distributed_training.md).
+It explains per-rank batch settings, optional Muon state sharding, and global
+metrics and checkpoint step counts.
+The [paired learning evaluator](../../tools/evaluate_decision_learning.md) records
+individual seeded episodes and estimates uncertainty in before/after performance.
+
 ## Rewards and episode boundaries
 
 Stock Puffer CartPole gives reward 1 on a continuing step and 0 on the step that

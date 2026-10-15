@@ -97,6 +97,27 @@ static inline double dict_get(Dict* dict, const char* key) {
     return item->value;
 }
 
+// Numeric scalars must not silently inherit a previous value after bad text.
+static inline int dict_scalar(const DictItem* item, double* value) {
+    if (!item || item->len) {
+        return 0;
+    }
+    *value = item->value;
+    if (!item->str) {
+        return 1;
+    }
+    char* end = NULL;
+    errno = 0;
+    *value = strtod(item->str, &end);
+    if (end == item->str || errno == ERANGE) {
+        return 0;
+    }
+    while (isspace((unsigned char)*end)) {
+        ++end;
+    }
+    return !*end;
+}
+
 static inline DictItem* dict_set(Dict* dict, const char* key, double value) {
     DictItem* item = dict_item(dict, key);
     dict_item_clear(item);
