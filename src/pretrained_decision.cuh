@@ -90,6 +90,51 @@ static __global__ void mask_logits(float* logits, const int* mask, int count, fl
     if (i < count && !mask[i]) logits[i] = fill;
 }
 
+static __global__ void supervised_loss(const float* logits, const int* mask,
+        const int* target, const float* temperatures, float* losses,
+        float* gradient, int B, int K) {
+    int b = blockIdx.x;
+    float temperature = temperatures ? temperatures[b] : 1.0f;
+    float maximum = -FLT_MAX;
+    for (int k = threadIdx.x; k < K; k += blockDim.x) {
+        if (mask[b * K + k])
+            maximum = fmaxf(maximum, logits[b * K + k] / temperature);
+    }
+    maximum = block_max(maximum);
+    float total = 0;
+    for (int k = threadIdx.x; k < K; k += blockDim.x) {
+        if (mask[b * K + k])
+            total += expf(logits[b * K + k] / temperature - maximum);
+    }
+    total = block_sum(total);
+    if (threadIdx.x == 0)
+        losses[b] = logf(total) +
+            (maximum - logits[b * K + target[b]] / temperature);
+    if (!gradient)
+        return;
+    for (int k = threadIdx.x; k < K; k += blockDim.x) {
+        float value = 0;
+        if (mask[b * K + k]) {
+            float probability = expf(logits[b * K + k] / temperature - maximum) / total;
+            value = (probability - (k == target[b])) / B / temperature;
+        }
+        gradient[b * K + k] = value;
+    }
+}
+
+static __global__ void adam_update(float* weights, const float* gradients,
+        float* first, float* second, size_t count, float step_size,
+        float inverse_sqrt_bias) {
+    size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= count)
+        return;
+    float gradient = gradients[i];
+    first[i] = 0.9f * first[i] + 0.1f * gradient;
+    second[i] = 0.999f * second[i] + 0.001f * gradient * gradient;
+    weights[i] -= step_size * first[i] /
+        (sqrtf(second[i]) * inverse_sqrt_bias + 1e-8f);
+}
+
 // These four confidence features are detached in Laya's original graph.
 static __global__ void act_input(float* output, float* pooled, const float* hidden,
         const float* logits, const int* marker_mask, int B, int T, int K, int D) {
@@ -123,6 +168,32 @@ static __global__ void scatter_cls(float* hidden, const float* gradient,
     if (i < B * D) hidden[(size_t)(i / D) * T * D + i % D] += gradient[(size_t)(i / D) * input_stride + i % D];
 }
 } // namespace decision_detail
+
+// One labeled question per row. The caller validates a nonempty mask, a valid
+// target slot and positive temperatures. Losses are per row; gradients are for
+// their minibatch mean. NULL temperatures means 1; NULL gradients evaluates only.
+// With two false/true logits, CE equals BCEWithLogits((true - false) / T, y),
+// including reversed presentation order. Choice and score use categorical CE.
+inline void decision_loss(const float* logits, const int* candidate_mask,
+        const int* target_index, const float* temperatures, float* row_losses,
+        float* d_logits, int batch, int options, cudaStream_t stream = 0) {
+    decision_detail::supervised_loss<<<batch, decision_detail::threads, 0, stream>>>(
+        logits, candidate_mask, target_index, temperatures, row_losses,
+        d_logits, batch, options);
+    decision_detail::cuda_check(cudaGetLastError());
+}
+
+// Standard FP32 Adam: beta1=.9, beta2=.999, epsilon=1e-8, no decay or clipping.
+// Moments are caller-owned, zeroed once before step 1 and retained across steps.
+inline void decision_adam(float* weights, const float* gradients, float* first,
+        float* second, size_t count, float lr, int step, cudaStream_t stream = 0) {
+    float step_size = lr / (1.0 - pow(0.9, step));
+    float inverse_sqrt_bias = 1.0 / sqrt(1.0 - pow(0.999, step));
+    decision_detail::adam_update<<<decision_detail::grid(count),
+        decision_detail::threads, 0, stream>>>(weights, gradients, first, second,
+        count, step_size, inverse_sqrt_bias);
+    decision_detail::cuda_check(cudaGetLastError());
+}
 
 struct DecisionOutput {
     float* logits; // Raw option logits [B,K], masked with Laya's -1e4 sentinel.
