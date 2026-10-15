@@ -176,6 +176,18 @@ class SnakeComparisonTests(unittest.TestCase):
             comparison.compare(path, other, resamples=1000,
                                allow_protocol_differences=['observation_format'])
 
+    def test_precision_treatment_requires_explicit_declaration(self):
+        before = self.fixture('historical-fp32')
+        explicit = self.fixture('explicit-fp32', changed=lambda rows: rows[0].update(gemm_precision='fp32'))
+        self.assertEqual(comparison.compare(before, explicit, resamples=1000)['protocol_differences'], {})
+        after = self.fixture('tf32', changed=lambda rows: rows[0].update(gemm_precision='tf32'))
+        with self.assertRaisesRegex(ValueError, 'protocols differ'):
+            comparison.compare(before, after, resamples=1000)
+        result = comparison.compare(before, after, resamples=1000,
+                                    allow_protocol_differences=['gemm_precision'])
+        self.assertEqual(result['protocol_differences'], {'gemm_precision': {'before': 'fp32', 'after': 'tf32'}})
+
+
     def test_food_reward_and_terminal_accounting_rejected(self):
         for key, value, message in (
             ('food_score', True, 'length/food'), ('food_score', -1, 'length/food'),

@@ -37,6 +37,7 @@
 // Project
 #include "ini.h"
 #include "native_checkpoint_io.h"
+#include "training_metrics.h"
 
 #ifdef PRECISION_FLOAT
 typedef float precision_t;
@@ -1988,6 +1989,9 @@ static void master_weights_setup(Float* mw, Prec* param,
 PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
 #ifdef PUFFER_DECISION_POLICY
     decision_policy_configure(ini);
+#else
+    if (strcmp(puf_ini_get_str(ini, "policy", "gemm_precision"), "fp32"))
+        throw std::invalid_argument("policy.gemm_precision is supported only by imported Transformer policies");
 #endif
     Hypers hypers = {
         .horizon = puf_ini_get(ini, "train", "horizon"),
@@ -2828,6 +2832,12 @@ typedef struct {
 } SweepJob;
 
 void run_sweep(Ini* ini, const char* exe_path) {
+    const char* metrics_path = puf_ini_get_str(ini, "base", "metrics_path");
+    if (*metrics_path && strcmp(metrics_path, "None")) {
+        fprintf(stderr, "sweep does not support base.metrics_path; "
+            "use a separate path per training run\n");
+        exit(1);
+    }
     // Build SweepSpace + param map from [sweep.<section>.<key>] sections.
     const char* goal = puf_ini_get_str(ini, "sweep", "goal");
     assert((strcmp(goal, "maximize") == 0 || strcmp(goal, "minimize") == 0)
@@ -3308,7 +3318,10 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         mkdir_p(log_dir);
     }
 
+    TrainingMetrics metrics = metrics_open(ctx->artifact_owner ?
+        puf_ini_get_str(ini, "base", "metrics_path") : NULL);
     PuffeRL* pufferl = create_pufferl(ini, ctx);
+    metrics_run(&metrics, ini, ctx->world_size);
     if (save_state || resume) puf_checkpoint::supported(pufferl);
     if (resume) puf_checkpoint::load(pufferl, ini, resume_path);
     if (warm_start) pufferl_load_policy(pufferl, 0, warm_start);
@@ -3474,6 +3487,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             dict_set(&new_log, "pool/num_hist", selfplay.num_hist);
             dict_set(&new_log, "pool/num_policies", pufferl->num_policies);
         }
+        metrics_log(&metrics, &new_log);
         // n=0 logs omit env/*; keep last complete-episode snapshot.
         int episodes = dict_get(&new_log, "env/n") > 0;
         if (ctx->artifact_owner) {
@@ -3686,6 +3700,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     }
     free(log_history.items);
     free(selfplay.pool);
+    metrics_close(&metrics);
     return result;
 }
 

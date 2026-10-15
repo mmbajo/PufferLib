@@ -122,14 +122,27 @@ class PretrainedEncoderTest(unittest.TestCase):
             raise AssertionError(f"missing encoder test harness: {cls.executable}")
         torch.set_num_threads(1)
         torch.backends.mha.set_fastpath_enabled(False)
+        cls.gemm_precision = os.environ.get("PUFFER_PRETRAINED_GEMM_PRECISION", "fp32")
+        if cls.gemm_precision not in ("fp32", "tf32"):
+            raise ValueError("PUFFER_PRETRAINED_GEMM_PRECISION must be fp32 or tf32")
 
     def compare(self, actual, expected, description, gradient=False):
         expected = expected.detach().numpy()
         self.assertEqual(actual.shape, expected.shape, description)
+        if self.gemm_precision == "tf32":
+            # Opt-in qualification bounds against the strict FP32 CPU oracle.
+            # Use normwise error because individual reference gradients can be
+            # near zero. Do not weaken the historical FP32 elementwise check.
+            self.assertTrue(np.isfinite(actual).all(), description)
+            error = np.linalg.norm((actual - expected).astype(np.float64))
+            scale = np.linalg.norm(expected.astype(np.float64))
+            absolute = (2e-4 if gradient else 4e-5) * np.sqrt(expected.size)
+            self.assertLessEqual(error, absolute + (2e-2 if gradient else 5e-3) * scale, description)
+            return
         np.testing.assert_allclose(actual, expected, atol=2e-4 if gradient else 4e-5,
                                    rtol=1e-3 if gradient else 5e-4, err_msg=description)
 
-    def run_case(self, config, batch=2, tokens=13):
+    def run_case(self, config, batch=2, tokens=13, require_tf32_difference=False):
         torch.manual_seed(9824)
         model, layers = reference_model(config)
         model.train()  # Dropout is explicitly zero; disable inference-only shortcuts.
@@ -171,16 +184,30 @@ class PretrainedEncoderTest(unittest.TestCase):
                     stream.write(tensor.to(torch.int32).numpy().astype("<i4").tobytes())
                 write_tensor(stream, hidden)
                 write_tensor(stream, upstream)
-            result = subprocess.run([self.executable, str(weights), str(inputs), str(results)],
+            result = subprocess.run([self.executable, str(weights), str(inputs), str(results), self.gemm_precision],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            fp32_output = None
+            if self.gemm_precision == "tf32" and require_tf32_difference:
+                fp32_results = directory / "fp32.bin"
+                result = subprocess.run(
+                    [self.executable, str(weights), str(inputs), str(fp32_results), "fp32"],
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                with fp32_results.open("rb") as stream:
+                    stream.seek(24)  # Magic and four dimensions precede the forward output.
+                    fp32_output = read_floats(stream, batch * tokens * config["width"])
             with results.open("rb") as stream:
                 self.assertEqual(stream.read(8), b"PUFPRO1\0")
                 self.assertEqual(struct.unpack("<4I", stream.read(16)),
                                  (batch, tokens, config["width"], config["layers"]))
                 shape = (batch, tokens, config["width"])
                 elements = batch * tokens * config["width"]
-                self.compare(read_floats(stream, elements).reshape(shape), output, "encoder output")
+                native_output = read_floats(stream, elements)
+                self.compare(native_output.reshape(shape), output, "encoder output")
+                if fp32_output is not None:
+                    self.assertFalse(np.array_equal(native_output, fp32_output),
+                        "aligned TF32 encoder output equals FP32; GEMM precision may be ignored")
                 self.assertEqual(len(intermediate), config["layers"])
                 for index, expected in enumerate(intermediate):
                     self.compare(read_floats(stream, elements).reshape(shape), expected, f"layer {index} output")
@@ -226,11 +253,20 @@ class PretrainedEncoderTest(unittest.TestCase):
         self.run_case(configuration("laya_head", width=128, heads=2, intermediate=512, layers=1),
                       batch=1, tokens=7)
 
+    def test_larger_aligned_projection_shapes(self):
+        for family in ("bert", "modernbert", "laya_head"):
+            with self.subTest(family=family):
+                self.run_case(configuration(family, width=128, heads=4,
+                                            intermediate=256, layers=2), batch=2, tokens=32,
+                              require_tf32_difference=True)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable")
+    parser.add_argument("--gemm-precision", choices=("fp32", "tf32"), default="fp32")
     args, remaining = parser.parse_known_args()
     if args.executable:
         os.environ["PUFFER_PRETRAINED_TEST_BINARY"] = args.executable
+    os.environ["PUFFER_PRETRAINED_GEMM_PRECISION"] = args.gemm_precision
     unittest.main(argv=[__file__, *remaining], verbosity=2)

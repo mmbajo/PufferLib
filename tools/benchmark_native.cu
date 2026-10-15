@@ -27,6 +27,7 @@ struct BenchmarkOptions {
 
 struct BenchmarkResult {
     char gpu[256];
+    char gemm_precision[8];
     int rank, gpu_id, agents, buffers, threads, horizon, minibatch;
     int warmup_updates, updates, padded_tokens;
     bool cuda_graphs, distributed_optimizer;
@@ -184,6 +185,8 @@ static int benchmark_rank(TrainContext* context, void* destination, void* user) 
         for (int i = 0; i < NUM_PROF; ++i) result.profile[i] = p->profile.accum[i] / 1000.0;
 #ifdef PUFFER_DECISION_POLICY
         result.padded_tokens = decision_policy_context->execution_tokens;
+        snprintf(result.gemm_precision, sizeof(result.gemm_precision), "%s",
+            pretrained::gemm_precision_name(decision_policy_context->config.encoder.gemm_precision));
 #endif
         if (options.check_replicas) {
             begin = wall_clock(); benchmark_check_replicas(p, control);
@@ -252,6 +255,7 @@ static void benchmark_print(const std::vector<BenchmarkResult>& ranks, bool chec
            aggregate.coordination, aggregate.device_used_gib, check_replicas ? "true" : "false",
            aggregate.replica_check, max_momentum, total_momentum,
            first.replicated_optimizer_momentum_bytes);
+    if (first.gemm_precision[0]) printf(",\"gemm_precision\":\"%s\"", first.gemm_precision);
     if (check_replicas) printf(",\"replicas_equal\":true,\"finite_master_weights\":true");
     for (int i = 0; i < NUM_PROF; ++i)
         printf(",\"profile_%s_seconds\":%.6f", PROF_NAMES[i], aggregate.profile[i]);

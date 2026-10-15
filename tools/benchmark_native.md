@@ -97,6 +97,11 @@ The JSON reports:
   timings and logical optimizer momentum bytes. Memory is **not peak memory**
   and can include other processes; use otherwise idle GPUs. Optimizer scratch
   is reported separately as element counts, since precision differs by build.
+- Imported decision policies also report `gemm_precision` (`fp32` or `tf32`).
+  The existing `precision` field describes tensor storage; it stays `fp32` for
+  TF32 matrix multiplication. Set `--policy.gemm_precision=tf32` explicitly to
+  benchmark that compute treatment. Keep all other settings and the GPU fixed,
+  and assess learning separately before adopting it.
 - `optimizer_momentum_bytes_max_rank`, `optimizer_momentum_bytes_total` and the
   replicated baseline bytes per rank distinguish actual logical momentum
   storage from a replicated optimizer. Whole-matrix ownership can be uneven.
@@ -116,8 +121,10 @@ and separate, seeded learning evaluations to judge task improvement.
 Stock CartPole uses a tiny recurrent policy over four numerical features;
 text CartPole uses a Transformer over tokens. Their throughput measures useful
 system costs but is not a comparison of equivalent architectures or inputs.
-The imported Transformer backend currently uses FP32, eager attention with
-quadratic workspace, fixed padding to the bundle context limit and no CUDA
-graphs. Native C++ alone does not make a large Transformer as fast as Puffer's
+The imported Transformer backend uses FP32 storage with strict FP32 matrix
+multiplication by default and optional TF32 matrix multiplication. It uses eager
+attention with quadratic workspace, fixed padding to the configured sequence
+budget and no CUDA graphs. TF32 does not reduce this activation memory. Native
+C++ alone does not make a large Transformer as fast as Puffer's
 small policies. Batching and sequence length must be considered alongside
 model size when interpreting results.

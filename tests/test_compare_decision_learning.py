@@ -118,6 +118,21 @@ class ComparisonTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, field):
                         comparison.load(path)
 
+    def test_precision_is_recorded_and_mixed_modes_rejected(self):
+        legacy = self.fixture('legacy', [4, 12])
+        explicit_fp32 = self.fixture('fp32', [4, 12],
+            changed=lambda rows: rows[0].update(gemm_precision='fp32'))
+        tf32 = self.fixture('tf32', [4, 12],
+            changed=lambda rows: rows[0].update(gemm_precision='tf32'))
+        result = comparison.compare(legacy, explicit_fp32, resamples=1000)
+        self.assertEqual(result['protocol']['gemm_precision'], 'fp32')
+        self.assertEqual(result['mean_length_change'], 0)
+        self.assertEqual(comparison.compare(tf32, tf32, resamples=1000)['mean_length_change'], 0)
+        for before, after in ((legacy, tf32), (tf32, explicit_fp32)):
+            with self.assertRaisesRegex(ValueError, 'protocols differ'):
+                comparison.compare(before, after, resamples=1000)
+
+
     def test_initial_state_must_have_four_finite_numbers(self):
         for state in ([0, 0, 0], [0, 0, 0, 0, 0], [0, 0, float('nan'), 0],
                       [0, float('inf'), 0, 0], [0, '0', 0, 0], [0, True, 0, 0], None):

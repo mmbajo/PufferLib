@@ -15,7 +15,7 @@ UINT64_MAX = (1 << 64) - 1
 TREATMENT_FIELDS = frozenset(('environment', 'bundle', 'model', 'representation',
     'observation_format', 'zero_init_critic', 'padded_tokens', 'bundle_max_tokens',
     'pooling', 'coordinates', 'model_width', 'model_layers', 'params',
-    'temperature', 'sampling', 'sampling_mode'))
+    'temperature', 'sampling', 'sampling_mode', 'gemm_precision'))
 SAMPLING_MODES = {'puffer_philox_categorical': 'sampled',
                   'greedy_first_max': 'greedy', 'puffer_philox_uniform_legal': 'random'}
 
@@ -71,6 +71,10 @@ def load(path):
     require(len(protocols) == 1 and len(summaries) == 1,
             f'{path}: require one complete protocol and summary')
     protocol, summary = protocols[0], summaries[0]
+    # The original native Snake evaluator only supported strict FP32 GEMMs.
+    # Normalize that historical omission, while requiring explicit permission
+    # to compare a reduced-precision evaluation with an FP32 evaluation.
+    protocol.setdefault('gemm_precision', 'fp32')
     require(records[0] is protocol and records[-1] is summary,
             f'{path}: protocol must be first and summary last')
     fields(protocol, ('version', 'environment', 'bundle', 'checkpoint', 'episodes',
