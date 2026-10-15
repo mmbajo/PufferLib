@@ -25,9 +25,12 @@ def load(path):
     if len(protocols) != 1 or len(summaries) != 1:
         raise ValueError(f'{path}: require one complete protocol and summary')
     protocol, summary = protocols[0], summaries[0]
+    # Historical evaluators only supported strict FP32 GEMMs. Record their
+    # effective default so old and explicit-FP32 records remain comparable.
+    protocol.setdefault('gemm_precision', 'fp32')
     # Older default-only records remain readable. When present, effective
     # execution/initialization controls must be valid and participate in the
-    # complete-protocol comparison below; missing values are never inferred.
+    # complete-protocol comparison below; these missing values are not inferred.
     if 'padded_tokens' in protocol:
         tokens = protocol['padded_tokens']
         if type(tokens) is not int or tokens < 1:

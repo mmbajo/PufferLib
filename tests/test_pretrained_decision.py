@@ -36,20 +36,39 @@ class PretrainedDecisionTest(unittest.TestCase):
             raise AssertionError(f"missing decision test harness: {cls.executable}")
         torch.set_num_threads(1)
         torch.backends.mha.set_fastpath_enabled(False)
+        cls.gemm_precision = os.environ.get("PUFFER_PRETRAINED_GEMM_PRECISION", "fp32")
+        if cls.gemm_precision not in ("fp32", "tf32"):
+            raise ValueError("PUFFER_PRETRAINED_GEMM_PRECISION must be fp32 or tf32")
 
     def compare(self, actual, expected, name, gradient=False):
+        if self.gemm_precision == "tf32":
+            expected = expected.detach().numpy()
+            self.assertEqual(actual.shape, expected.shape, name)
+            self.assertTrue(np.isfinite(actual).all(), name)
+            # Exclude the fixed masking sentinel from the norm: its magnitude
+            # must not hide drift in the meaningful option logits.
+            if name == "option logits":
+                masked = expected == -1e4
+                np.testing.assert_array_equal(actual[masked], expected[masked])
+                actual, expected = actual[~masked], expected[~masked]
+            error = np.linalg.norm((actual - expected).astype(np.float64))
+            scale = np.linalg.norm(expected.astype(np.float64))
+            absolute = (2e-4 if gradient else 4e-5) * np.sqrt(expected.size)
+            self.assertLessEqual(error, absolute + (2e-2 if gradient else 5e-3) * scale, name)
+            return
         np.testing.assert_allclose(actual, expected.detach().numpy(),
                                    atol=2e-4 if gradient else 4e-5,
                                    rtol=1e-3 if gradient else 5e-4, err_msg=name)
 
-    def run_case(self, config, head_layers=2, batch=3, options=4, critic=False, act_only=False):
+    def run_case(self, config, head_layers=2, batch=3, options=4, critic=False, act_only=False,
+                 tokens=11, require_tf32_difference=False):
         torch.manual_seed(38439)
         encoder, _ = reference_model(config)
         model = DecisionModel(encoder, head_layers=head_layers, n_act=3, dropout=0)
         model.train()
         if critic:
             model.value_head = torch.nn.Linear(config["width"], 1)
-        tokens, n_act = 11, 3
+        n_act = 3
         ids = torch.randint(3, config["vocab"], (batch, tokens))
         ids[:, 0], ids[:, -1] = 1, 2
         ids[:, 2:4] = 7  # Repeated embeddings must accumulate their gradients.
@@ -95,13 +114,27 @@ class PretrainedDecisionTest(unittest.TestCase):
                     stream.write(tensor.to(torch.int32).numpy().astype("<i4").tobytes())
                 for tensor in (d_logits, d_act, d_values):
                     write_tensor(stream, tensor)
-            result = subprocess.run([self.executable, str(weights), str(inputs), str(results)],
+            result = subprocess.run([self.executable, str(weights), str(inputs), str(results), self.gemm_precision],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            fp32_logits = None
+            if self.gemm_precision == "tf32" and require_tf32_difference:
+                fp32_results = directory / "fp32.bin"
+                result = subprocess.run(
+                    [self.executable, str(weights), str(inputs), str(fp32_results), "fp32"],
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                with fp32_results.open("rb") as stream:
+                    stream.seek(24)  # Magic and four dimensions precede option logits.
+                    fp32_logits = read_floats(stream, batch * options)
             with results.open("rb") as stream:
                 self.assertEqual(stream.read(8), b"PUFPDO1\0")
                 self.assertEqual(struct.unpack("<4I", stream.read(16)), (batch, options, n_act, critic))
-                self.compare(read_floats(stream, batch * options).reshape(batch, options), logits, "option logits")
+                native_logits = read_floats(stream, batch * options)
+                self.compare(native_logits.reshape(batch, options), logits, "option logits")
+                if fp32_logits is not None:
+                    self.assertFalse(np.array_equal(native_logits, fp32_logits),
+                        "aligned TF32 decision logits equal FP32; GEMM precision may be ignored")
                 self.compare(read_floats(stream, batch * n_act).reshape(batch, n_act), act_logits, "act logits")
                 if critic:
                     self.compare(read_floats(stream, batch), values, "additional critic values")
@@ -133,11 +166,20 @@ class PretrainedDecisionTest(unittest.TestCase):
     def test_act_features_are_detached_from_option_scorer(self):
         self.run_case(configuration("modernbert", layers=1), head_layers=1, act_only=True)
 
+    def test_larger_full_decision_projection_shapes(self):
+        for family in ("bert", "modernbert"):
+            with self.subTest(family=family):
+                self.run_case(configuration(family, width=128, heads=4,
+                                            intermediate=256, layers=2), critic=True, batch=2,
+                              tokens=32, require_tf32_difference=True)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable")
+    parser.add_argument("--gemm-precision", choices=("fp32", "tf32"), default="fp32")
     args, remaining = parser.parse_known_args()
     if args.executable:
         os.environ["PUFFER_PRETRAINED_DECISION_TEST_BINARY"] = args.executable
+    os.environ["PUFFER_PRETRAINED_GEMM_PRECISION"] = args.gemm_precision
     unittest.main(argv=[__file__, *remaining], verbosity=2)

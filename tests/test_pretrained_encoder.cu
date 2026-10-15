@@ -2,11 +2,12 @@
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 4, "usage: pretrained-test weights.bin input.bin output.bin");
+        require(argc == 4 || argc == 5, "usage: pretrained-test weights.bin input.bin output.bin [fp32|tf32]");
         std::ifstream weights(argv[1], std::ios::binary), input(argv[2], std::ios::binary);
         std::ofstream output(argv[3], std::ios::binary | std::ios::trunc);
         require((bool)weights && (bool)input && (bool)output, "cannot open encoder test files");
         auto config = load_config(weights);
+        if (argc == 5) config.gemm_precision = pretrained::parse_gemm_precision(argv[4]);
         require(read_string(input, 8) == std::string("PUFPRI1\0", 8), "invalid input fixture magic");
         int batch = read<uint32_t>(input), tokens = read<uint32_t>(input);
         require(batch > 0 && batch <= 16 && tokens > 0 && tokens <= 512, "invalid fixture dimensions");

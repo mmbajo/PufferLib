@@ -167,6 +167,7 @@ int main(int argc, char** argv) {
         eval_cuda(cudaSetDevice(device));
         const int B = batch, K = IB_SNAKE_ACTIONS;
         std::string bundle, model, representation, pooling, coordinates;
+        const char* gemm_precision = "fp32";
         bool zero_init_critic = false;
         int observation_format = 0, padded_tokens = 101, bundle_max_tokens = 101;
 #ifdef PUFFER_DECISION_POLICY
@@ -178,7 +179,10 @@ int main(int argc, char** argv) {
         zero_init_critic = decision_policy_context->zero_init_critic;
         padded_tokens = decision_policy_context->execution_tokens;
         bundle_max_tokens = decision_policy_context->bundle.max_len;
+        gemm_precision = pretrained::gemm_precision_name(decision_policy_context->config.encoder.gemm_precision);
 #else
+        if (strcmp(puf_ini_get_str(&ini, "policy", "gemm_precision"), "fp32"))
+            throw std::invalid_argument("board Transformer supports only policy.gemm_precision=fp32");
         eval_require_zero_option(&ini, "env", "observation_format");
         eval_require_zero_option(&ini, "policy", "zero_init_critic");
         eval_require_zero_option(&ini, "policy", "sequence_length");
@@ -280,7 +284,7 @@ int main(int argc, char** argv) {
                "\"batch\":%d,\"model_init_seed\":%llu,\"environment_seed_base\":%llu,\"action_seed_base\":%llu,"
                "\"sampling\":%s,\"sampling_mode\":%s,\"max_steps\":%d,\"temperature\":%.9g,"
                "\"padded_tokens\":%d,\"bundle_max_tokens\":%d,\"params\":%ld,\"grid_size\":10,\"action_count\":4,"
-               "\"primary_metric\":\"food_score\",\"mask_rule\":\"reverse_only\"}\n",
+               "\"gemm_precision\":\"%s\",\"primary_metric\":\"food_score\",\"mask_rule\":\"reverse_only\"}\n",
                eval_json(PUFFER_ENV_NAME).c_str(), eval_json(model).c_str(), eval_json(representation).c_str(),
                observation_format, zero_init_critic ? "true" : "false", encoder.out_dim, encoder.num_layers,
                eval_json(pooling).c_str(), eval_json(coordinates).c_str(),
@@ -293,7 +297,7 @@ int main(int argc, char** argv) {
 #else
                1.0,
 #endif
-               padded_tokens, bundle_max_tokens, parameter_alloc.total_elems);
+               padded_tokens, bundle_max_tokens, parameter_alloc.total_elems, gemm_precision);
         int next = B, complete = 0;
         double total_reward = 0, total_length = 0, total_food = 0, total_food_sq = 0;
         int collisions = 0, full_boards = 0, pure_timeouts = 0;

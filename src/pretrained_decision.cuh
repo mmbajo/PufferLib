@@ -144,7 +144,7 @@ public:
         try {
             blas_check(cublasCreate(&blas_));
             blas_check(cublasSetStream(blas_, stream));
-            blas_check(cublasSetMathMode(blas_, CUBLAS_PEDANTIC_MATH));
+            detail::configure_gemm_precision(blas_, config.encoder.gemm_precision);
             encoder_.reset(new Encoder(config.encoder, max_batch, max_tokens, stream, trainable, false));
             encoder_count_ = encoder_->parameters().size();
             if (config.head_layers) {

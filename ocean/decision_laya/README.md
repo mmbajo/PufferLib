@@ -176,6 +176,60 @@ training. Its initial configuration uses one agent, rollout horizon 4, minibatch
 4, learning rate `1e-5`, synchronous collection and disabled CUDA graphs.
 The packed training adapter supports bundle `max_len` up to 2048 and encoder
 widths divisible by four.
+
+`--policy.gemm_precision=fp32` is the default and keeps strict FP32 cuBLAS
+matrix products. `--policy.gemm_precision=tf32` permits TF32 Tensor Core
+products on Ampere or newer GPUs for the imported encoder, Laya Transformer
+head, decision scorer, act head and PPO critic, in both collection and
+training. For example:
+
+```sh
+# Default arithmetic, unchanged:
+./build/puffer_decision_laya train --policy.bundle=bundles/laya \
+    --policy.gemm_precision=fp32
+# Explicit experiment with reduced-mantissa matrix products:
+./build/puffer_decision_laya train --policy.bundle=bundles/laya \
+    --policy.gemm_precision=tf32
+```
+
+Both modes retain FP32 parameters, gradients, activations, normalization,
+softmax and optimizer state; TF32 does not reduce their memory footprint.
+The board-token `decision_snake` model is outside this option's scope.
+TF32 requires Ampere or newer GPU hardware. It rejects `NVIDIA_TF32_OVERRIDE`
+unless unset or exactly `1`, because a disabling override would invalidate the
+selected experiment. Full training checkpoints include the selected policy setting;
+changing it requires a weight warm start rather than a full state resume.
+Flat weights retain their format and can be evaluated with either mode, but
+comparisons must record the evaluator's arithmetic setting. The standalone
+typed-decision CLI continues to use strict FP32.
+
+TF32 changes floating-point results and may change policy learning. Compile
+checks and host option tests alone establish neither numerical parity nor a
+speed improvement. Run the encoder oracle on a supported GPU in both modes,
+then benchmark and evaluate multiple training seeds before selecting it:
+
+```sh
+nvcc -std=c++17 -O2 -arch=sm_80 -x cu tests/test_pretrained_precision.cpp \
+    -lcublas -o build/test_pretrained_precision
+./build/test_pretrained_precision
+./tests/build_pretrained_tests.sh encoder
+python tests/test_pretrained_encoder.py --executable build/test_pretrained_encoder \
+    --gemm-precision fp32
+python tests/test_pretrained_encoder.py --executable build/test_pretrained_encoder \
+    --gemm-precision tf32
+./tests/build_pretrained_tests.sh decision
+python tests/test_pretrained_decision.py --executable build/test_pretrained_decision \
+    --gemm-precision fp32
+python tests/test_pretrained_decision.py --executable build/test_pretrained_decision \
+    --gemm-precision tf32
+```
+
+The TF32 oracles use prospective normwise error bounds against FP32 references
+for encoder layers, decision outputs and every named gradient. Strict FP32
+keeps its existing elementwise bounds. The aligned TF32 cases also require
+outputs to differ from FP32 execution of the same inputs, so an ignored TF32
+setting fails. Neither test substitutes for the full-model learning comparison.
+
 It retains Puffer's training algorithm rather than reproducing Laya's original
 training recipe. Sampling, optimizer choice and rewards therefore define a new
 fine-tuning experiment. The act head has no task loss, and imported calibration
