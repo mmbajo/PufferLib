@@ -4,12 +4,18 @@
 #include <stdbool.h>
 #include <math.h>
 #include <time.h>
+#ifndef PUF_HEADLESS
 #include "raylib.h"
+#endif
+#ifndef CARTPOLE_CUSTOM_OBSERVATIONS
 typedef float obs_t;
+#endif
 #include "pufferenv.h"
 
 #define ACT_SIZES {2}
+#ifndef OBS_SIZE
 #define OBS_SIZE 4
+#endif
 #define NUM_ATNS 1
 
 #define X_THRESHOLD 2.4f
@@ -18,6 +24,14 @@ typedef float obs_t;
 #define WIDTH 600
 #define HEIGHT 200
 #define SCALE 100
+
+// Optional adapters share the same physics, rewards, reset and rendering.
+#ifndef CARTPOLE_STEP_LIMIT
+#define CARTPOLE_STEP_LIMIT(env) MAX_STEPS
+#endif
+#ifndef CARTPOLE_LEFT_ACTION
+#define CARTPOLE_LEFT_ACTION -1.0f
+#endif
 
 typedef struct Log Log;
 struct Log {
@@ -55,16 +69,19 @@ struct Env {
     int continuous;
     float episode_return;
     unsigned int rng;
+#ifdef CARTPOLE_EXTRA_FIELDS
+    CARTPOLE_EXTRA_FIELDS
+#endif
 };
 typedef Env Cartpole;
 
 void add_log(Cartpole* env) {
-    env->log.perf += env->episode_return / MAX_STEPS;
+    env->log.perf += env->episode_return / CARTPOLE_STEP_LIMIT(env);
     env->log.episode_length += env->tick;
     env->log.score += env->tick;
     env->log.x_threshold_termination += (env->x < -X_THRESHOLD || env->x > X_THRESHOLD);
     env->log.pole_angle_termination += (env->theta < -THETA_THRESHOLD_RADIANS || env->theta > THETA_THRESHOLD_RADIANS);
-    env->log.max_steps_termination += (env->tick >= MAX_STEPS);
+    env->log.max_steps_termination += (env->tick >= CARTPOLE_STEP_LIMIT(env));
     env->log.n += 1;
 }
 
@@ -76,6 +93,7 @@ void init(Cartpole* env) {
 void puf_close(Cartpole* env) {
 }
 
+#ifndef PUF_HEADLESS
 const Color PUFF_RED = (Color){187, 0, 0, 255};
 const Color PUFF_CYAN = (Color){0, 187, 187, 255};
 const Color PUFF_WHITE = (Color){241, 241, 241, 241};
@@ -101,7 +119,7 @@ static void cartpole_human_controls(Cartpole *env) {
     if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
         env->agents[0].actions[0] = 1.0f;
     } else {
-        env->agents[0].actions[0] = -1.0f;
+        env->agents[0].actions[0] = CARTPOLE_LEFT_ACTION;
     }
 }
 
@@ -136,13 +154,21 @@ void puf_render(Cartpole* env) {
     EndDrawing();
     puf_web_vsync();
 }
+#else
+static void cartpole_human_controls(Cartpole* env) { (void)env; }
+void puf_render(Cartpole* env) { (void)env; }
+#endif
 
 void compute_observations(Cartpole* env) {
+#ifdef CARTPOLE_ENCODE_OBSERVATION
+    CARTPOLE_ENCODE_OBSERVATION(env, env->agents[0].observations);
+#else
     float* obs = env->agents[0].observations;
     obs[0] = env->x;
     obs[1] = env->x_dot;
     obs[2] = env->theta;
     obs[3] = env->theta_dot;
+#endif
 }
 
 void puf_reset(Cartpole* env) {
@@ -184,12 +210,15 @@ void puf_step(Cartpole* env) {
     
     bool terminated = env->x < -X_THRESHOLD || env->x > X_THRESHOLD ||
                 env->theta < -THETA_THRESHOLD_RADIANS || env->theta > THETA_THRESHOLD_RADIANS;
-    bool truncated = env->tick >= MAX_STEPS;
+    bool truncated = env->tick >= CARTPOLE_STEP_LIMIT(env);
     bool done = terminated || truncated;
 
     env->agents[0].rewards[0] = done ? 0.0f : 1.0f;
     env->episode_return += env->agents[0].rewards[0];
     env->agents[0].terminals[0] = terminated ? 1 : 0;
+#ifdef CARTPOLE_AFTER_STEP
+    CARTPOLE_AFTER_STEP(env, terminated, truncated);
+#endif
 
     if (done) {
         add_log(env);
@@ -223,4 +252,3 @@ void puf_init(Env* env, Dict* kwargs) {
     env->agents[0].policy = 0;
     init(env);
 }
-

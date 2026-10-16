@@ -1,0 +1,19 @@
+[package]
+name = "puffer-tokenizer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[lib]
+name = "puffer_tokenizer"
+crate-type = ["staticlib"]
+
+[dependencies]
+# Match the Python parity oracle; no network/download support in the runtime.
+tokenizers = { version = "=0.23.2", default-features = false, features = ["onig"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
