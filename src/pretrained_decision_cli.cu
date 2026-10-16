@@ -1,5 +1,5 @@
-// Native JSONL inference for an imported Laya model or a new decision head on a
-// supported pretrained encoder. No Python or PyTorch is loaded by this program.
+// Native JSONL inference and typed supervision for imported decision models.
+// No Python or PyTorch is loaded by this program.
 #include "pretrained_decision.cuh"
 #include "pretrained_input.h"
 #include <charconv>
@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
+#include <cstdio>
 
 namespace {
 using namespace pretrained;
@@ -246,6 +247,15 @@ Question parse_question(const cJSON* value, const NumberText& numbers) {
     return question;
 }
 
+Sequence pack_question(const Bundle& bundle, const Tokenizer& tokenizer,
+        const std::string& state, const Question& question, int token_limit) {
+    SequenceOptions options;
+    options.max_len = token_limit;
+    options.option_order = question.order;
+    return build_sequence(bundle, tokenizer, state, question.type,
+        question.instructions, question.options, options);
+}
+
 json::Document predict(const std::string& request, Bundle& bundle, Tokenizer& tokenizer,
         DecisionModel& model, bool raw, int token_limit) {
     auto document = json::parse(request);
@@ -260,11 +270,7 @@ json::Document predict(const std::string& request, Bundle& bundle, Tokenizer& to
     size_t input_tokens = 0;
     for (auto item = questions->child; item; item = item->next) {
         auto question = parse_question(item, numbers);
-        SequenceOptions options;
-        options.max_len = token_limit;
-        options.option_order = question.order;
-        auto sequence = build_sequence(bundle, tokenizer, state_text, question.type,
-            question.instructions, question.options, options);
+        auto sequence = pack_question(bundle, tokenizer, state_text, question, token_limit);
         int T = sequence.ids.size(), K = sequence.marker_positions.size();
         Device<int> ids(sequence.ids), attention(std::vector<int>(T, 1));
         Device<int> markers(sequence.marker_positions), valid(std::vector<int>(K, 1));
@@ -318,29 +324,271 @@ json::Document predict(const std::string& request, Bundle& bundle, Tokenizer& to
     cJSON_AddNumberToObject(usage, "output_tokens", 0);
     return response;
 }
+struct SupervisedRow {
+    Sequence sequence;
+    std::string state;
+    std::vector<int> order;
+    int target;
+    float temperature;
+};
+
+std::vector<SupervisedRow> read_supervision(const std::string& path, const Bundle& bundle,
+        const Tokenizer& tokenizer, int token_limit) {
+    std::ifstream input(path);
+    if (!input) throw std::runtime_error("cannot open supervision data: " + path);
+    std::vector<SupervisedRow> rows;
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.empty()) continue;
+        auto document = json::parse(line);
+        auto root = document.get();
+        const auto numbers = request_numbers(line, root);
+        auto questions = json::required(root, "questions");
+        json::check(cJSON_IsObject(questions) && cJSON_GetArraySize(questions) == 1,
+            "supervision requires exactly one question per row");
+        auto question = parse_question(questions->child, numbers);
+        SupervisedRow row;
+        row.state = criterion(json::required(root, "state"), numbers);
+        row.sequence = pack_question(bundle, tokenizer, row.state, question, token_limit);
+        json::check(!row.sequence.stats.truncated, "supervision state exceeds token budget");
+        int target = json::as_integer(json::required(root, "target"),
+            0, question.options.size() - 1);
+        row.order = option_permutation(question.options.size(), question.order);
+        row.target = std::find(row.order.begin(), row.order.end(), target) - row.order.begin();
+        row.temperature = decision_temperature(bundle, row.sequence.qtype, row.order.size());
+        rows.push_back(std::move(row));
+    }
+    json::check(!rows.empty(), "supervision data is empty");
+    return rows;
+}
+
+struct SupervisedBatch {
+    std::vector<int> host;
+    std::vector<float> temperatures;
+    int* input;
+    float* output;
+};
+struct SupervisedStats {
+    int questions = 0, correct = 0;
+    double loss = 0;
+};
+
+std::vector<SupervisedStats> supervised_pass(DecisionModel& model,
+        const std::vector<SupervisedRow>& rows, const std::vector<int>& order,
+        int batch_size, int pad, SupervisedBatch* batch, int validation_epoch = -1,
+        float* moments = nullptr, size_t parameters = 0, float learning_rate = 0,
+        int* updates = nullptr) {
+    using decision::transformer_detail::cuda_check;
+    std::vector<SupervisedStats> stats(3);
+    for (size_t start = 0; start < rows.size(); start += batch_size) {
+        int B = std::min((size_t)batch_size, rows.size() - start), T = 0, K = 0;
+        for (int b = 0; b < B; ++b) {
+            const auto& sequence = rows[order[start + b]].sequence;
+            T = std::max(T, (int)sequence.ids.size());
+            K = std::max(K, (int)sequence.marker_positions.size());
+        }
+        size_t count = 2 * B * T + 2 * B * K + 2 * B;
+        std::fill(batch->host.begin(), batch->host.begin() + count, 0);
+        int* ids = batch->host.data();
+        int* attention = ids + B * T;
+        int* markers = attention + B * T;
+        int* valid = markers + B * K;
+        int* types = valid + B * K;
+        int* targets = types + B;
+        std::fill(ids, attention, pad);
+        for (int b = 0; b < B; ++b) {
+            const auto& row = rows[order[start + b]];
+            const auto& sequence = row.sequence;
+            std::copy(sequence.ids.begin(), sequence.ids.end(), ids + b * T);
+            std::fill(attention + b * T, attention + b * T + sequence.ids.size(), 1);
+            std::copy(sequence.marker_positions.begin(), sequence.marker_positions.end(),
+                markers + b * K);
+            std::fill(valid + b * K, valid + b * K + sequence.marker_positions.size(), 1);
+            types[b] = sequence.qtype;
+            targets[b] = row.target;
+            batch->temperatures[b] = row.temperature;
+        }
+        cuda_check(cudaMemcpy(batch->input, ids, count * sizeof(int), cudaMemcpyHostToDevice));
+        cuda_check(cudaMemcpy(batch->output, batch->temperatures.data(),
+            B * sizeof(float), cudaMemcpyHostToDevice));
+        int* d_attention = batch->input + (attention - ids);
+        int* d_markers = batch->input + (markers - ids);
+        int* d_valid = batch->input + (valid - ids);
+        int* d_types = batch->input + (types - ids);
+        int* d_targets = batch->input + (targets - ids);
+        auto output = model.forward(batch->input, d_attention, nullptr,
+            d_markers, d_valid, d_types, B, T, K);
+        float* losses = batch->output + B;
+        float* gradient = losses + B;
+        decision_loss(output.logits, d_valid, d_targets, batch->output,
+            losses, moments ? gradient : nullptr, B, K);
+        auto host_losses = download(losses, B);
+        auto logits = download(output.logits, B * K);
+        for (int b = 0; b < B; ++b) {
+            const auto& row = rows[order[start + b]];
+            int size = row.sequence.marker_positions.size(), best = 0;
+            auto probabilities = probability_softmax(std::vector<float>(
+                logits.begin() + b * K, logits.begin() + b * K + size), row.temperature);
+            for (int k = 1; k < size; ++k) {
+                if (probabilities[k] > probabilities[best] ||
+                        (probabilities[k] == probabilities[best] &&
+                        row.order[k] < row.order[best])) {
+                    best = k;
+                }
+            }
+            auto& total = stats[row.sequence.qtype];
+            ++total.questions;
+            total.correct += best == row.target;
+            total.loss += host_losses[b];
+            if (validation_epoch >= 0) {
+                printf("{\"event\":\"validation_row\",\"epoch\":%d,\"row\":%d,"
+                    "\"correct\":%d,\"log_loss\":%.17g}\n", validation_epoch,
+                    order[start + b], best == row.target, (double)host_losses[b]);
+            }
+        }
+        if (moments) {
+            model.zero_grad();
+            model.backward(gradient);
+            ++*updates;
+            size_t offset = 0;
+            for (const auto& p : model.parameters()) {
+                decision_adam(p.data, p.grad, moments + offset, moments + parameters + offset,
+                    p.count, learning_rate, *updates);
+                offset += p.count;
+            }
+        }
+    }
+    return stats;
+}
+
+void print_supervised_evaluation(const char* split, int epoch,
+        const std::vector<SupervisedRow>& rows, const std::vector<SupervisedStats>& stats) {
+    std::set<std::string> states;
+    for (const auto& row : rows) states.insert(row.state);
+    printf("{\"event\":\"evaluation\",\"split\":\"%s\",\"epoch\":%d,"
+        "\"states\":%zu,\"questions\":%zu,\"types\":{", split, epoch, states.size(), rows.size());
+    bool first = true;
+    for (int type = 0; type < 3; ++type) {
+        const auto& total = stats[type];
+        if (!total.questions) continue;
+        printf("%s\"%s\":{\"questions\":%d,\"accuracy\":%.17g,\"log_loss\":%.17g}",
+            first ? "" : ",", question_type_name(type), total.questions,
+            (double)total.correct / total.questions, total.loss / total.questions);
+        first = false;
+    }
+    printf("}}\n");
+    fflush(stdout);
+}
+
+void save_puffer_weights(DecisionModel& model, const std::string& path) {
+    FILE* output = fopen(path.c_str(), "wbx");
+    if (!output) throw std::runtime_error("cannot create --save-weights: " + path);
+    std::vector<float> chunk(1 << 20);
+    const float padding[3] = {};
+    for (const auto& p : model.parameters()) {
+        for (size_t offset = 0; offset < p.count;) {
+            size_t count = std::min(chunk.size(), p.count - offset);
+            decision::transformer_detail::cuda_check(cudaMemcpy(chunk.data(), p.data + offset,
+                count * sizeof(float), cudaMemcpyDeviceToHost));
+            if (fwrite(chunk.data(), sizeof(float), count, output) != count)
+                throw std::runtime_error("cannot write --save-weights");
+            offset += count;
+        }
+        size_t count = ((p.count + 3) & ~size_t(3)) - p.count;
+        if (fwrite(padding, sizeof(float), count, output) != count)
+            throw std::runtime_error("cannot write --save-weights padding");
+    }
+    if (fclose(output)) throw std::runtime_error("cannot close --save-weights");
+}
+
+void supervise(DecisionModel& model, const Bundle& bundle,
+        const std::vector<SupervisedRow>& train, const std::vector<SupervisedRow>& validation,
+        int max_tokens, int max_options, int batch_size, int epochs, float learning_rate,
+        unsigned seed, const std::string& save_path) {
+    using decision::transformer_detail::cuda_check;
+    SupervisedBatch batch;
+    batch.host.resize(2 * batch_size * (max_tokens + max_options + 1));
+    batch.temperatures.resize(batch_size);
+    cuda_check(cudaMalloc(&batch.input, batch.host.size() * sizeof(int)));
+    cuda_check(cudaMalloc(&batch.output, batch_size * (max_options + 2) * sizeof(float)));
+    size_t parameters = 0;
+    for (const auto& p : model.parameters()) parameters += p.count;
+    float* moments = nullptr;
+    cuda_check(cudaMalloc(&moments, 2 * parameters * sizeof(float)));
+    cuda_check(cudaMemset(moments, 0, 2 * parameters * sizeof(float)));
+    std::vector<int> train_order(train.size()), valid_order(validation.size());
+    std::iota(train_order.begin(), train_order.end(), 0);
+    std::iota(valid_order.begin(), valid_order.end(), 0);
+    int updates = 0;
+    auto evaluate = [&](int epoch) {
+        print_supervised_evaluation("train", epoch, train, supervised_pass(model, train,
+            train_order, batch_size, bundle.pad_id, &batch));
+        print_supervised_evaluation("validation", epoch, validation, supervised_pass(model,
+            validation, valid_order, batch_size, bundle.pad_id, &batch, epoch));
+    };
+    evaluate(0);
+    std::mt19937 random(seed);
+    for (int epoch = 1; epoch <= epochs; ++epoch) {
+        std::shuffle(train_order.begin(), train_order.end(), random);
+        auto stats = supervised_pass(model, train, train_order, batch_size, bundle.pad_id,
+            &batch, -1, moments, parameters, learning_rate, &updates);
+        double loss = 0;
+        for (const auto& total : stats) loss += total.loss;
+        printf("{\"event\":\"train\",\"epoch\":%d,\"updates\":%d,\"questions\":%zu,"
+            "\"mean_log_loss\":%.17g}\n", epoch, updates, train.size(), loss / train.size());
+        fflush(stdout);
+    }
+    if (epochs) evaluate(epochs);
+    save_puffer_weights(model, save_path);
+    cuda_check(cudaFree(moments));
+    cuda_check(cudaFree(batch.input));
+    cuda_check(cudaFree(batch.output));
+}
 } // namespace
 
 int main(int argc, char** argv) {
     try {
-        std::string directory, input_path, weights_path;
+        std::string directory, input_path, weights_path, train_path, validation_path, save_path;
+        int epochs = 1, batch_size = 16, seed = 1;
+        float learning_rate = .001f;
         int max_tokens = 0;
         bool raw = false;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--raw") raw = true;
             else if (arg == "--help") {
-                std::cout << "Usage: pretrained_decision --bundle DIR [--weights PUFFER.bin] [--input JSONL] [--max-tokens N] [--raw]\n";
+                std::cout << "Usage: pretrained_decision --bundle DIR [--weights PUFFER.bin] "
+                    "[--input JSONL] [--max-tokens N] [--raw]\n"
+                    "Supervision: --train JSONL --validation JSONL --save-weights PUFFER.bin "
+                    "[--epochs N] [--batch-size N] [--learning-rate F] [--seed N]\n";
                 return 0;
-            } else if ((arg == "--bundle" || arg == "--input" || arg == "--max-tokens" || arg == "--weights") && i + 1 < argc) {
+            } else if ((arg == "--bundle" || arg == "--input" || arg == "--max-tokens" ||
+                    arg == "--weights" || arg == "--train" || arg == "--validation" ||
+                    arg == "--save-weights" || arg == "--epochs" || arg == "--batch-size" ||
+                    arg == "--learning-rate" || arg == "--seed") && i + 1 < argc) {
                 std::string value = argv[++i];
                 if (arg == "--bundle") directory = value;
                 else if (arg == "--input") input_path = value;
                 else if (arg == "--weights") weights_path = value;
+                else if (arg == "--train") train_path = value;
+                else if (arg == "--validation") validation_path = value;
+                else if (arg == "--save-weights") save_path = value;
                 else {
                     size_t consumed = 0;
-                    max_tokens = std::stoi(value, &consumed);
-                    if (consumed != value.size() || max_tokens < 1)
-                        throw std::invalid_argument("invalid --max-tokens");
+                    if (arg == "--learning-rate") {
+                        learning_rate = std::stof(value, &consumed);
+                        if (!std::isfinite(learning_rate) || learning_rate <= 0)
+                            throw std::invalid_argument("invalid --learning-rate");
+                    } else {
+                        int number = std::stoi(value, &consumed);
+                        if (number < 0 || (arg == "--max-tokens" && !number))
+                            throw std::invalid_argument("invalid " + arg);
+                        if (arg == "--max-tokens") max_tokens = number;
+                        else if (arg == "--epochs") epochs = number;
+                        else if (arg == "--batch-size") batch_size = number;
+                        else seed = number;
+                    }
+                    if (consumed != value.size()) throw std::invalid_argument("invalid " + arg);
                 }
             } else throw std::invalid_argument("unknown or incomplete argument: " + arg);
         }
@@ -349,11 +597,42 @@ int main(int argc, char** argv) {
         Tokenizer tokenizer(bundle.tokenizer_path);
         if (!max_tokens) max_tokens = bundle.max_len;
         if (max_tokens < 1 || max_tokens > bundle.encoder.max_positions) throw std::invalid_argument("invalid --max-tokens");
-        DecisionConfig config{bundle.encoder, bundle.head_layers, bundle.n_act, !weights_path.empty()};
-        DecisionModel model(config, 1, max_tokens, std::min(4096, max_tokens), nullptr, false);
-        model.initialize_new_heads(1, bundle.kind == "laya");
+        bool training = !train_path.empty();
+        if (training && (validation_path.empty() || save_path.empty() ||
+                !input_path.empty() || raw))
+            throw std::invalid_argument(
+                "--train requires --validation and --save-weights, without --input/--raw");
+        if (!training && (!validation_path.empty() || !save_path.empty()))
+            throw std::invalid_argument("--validation and --save-weights require --train");
+        std::vector<SupervisedRow> train, validation;
+        int max_options = std::min(4096, max_tokens);
+        if (training) {
+            train = read_supervision(train_path, bundle, tokenizer, max_tokens);
+            validation = read_supervision(validation_path, bundle, tokenizer, max_tokens);
+            std::set<std::string> training_states;
+            max_options = 0;
+            for (const auto& row : train) {
+                training_states.insert(row.state);
+                max_options = std::max(max_options, (int)row.sequence.marker_positions.size());
+            }
+            for (const auto& row : validation) {
+                json::check(!training_states.count(row.state),
+                    "training and validation states overlap");
+                max_options = std::max(max_options, (int)row.sequence.marker_positions.size());
+            }
+        }
+        DecisionConfig config{bundle.encoder, bundle.head_layers, bundle.n_act,
+            training || !weights_path.empty()};
+        DecisionModel model(config, training ? batch_size : 1, max_tokens,
+            max_options, nullptr, training);
+        model.initialize_new_heads(seed, bundle.kind == "laya");
         if (weights_path.empty()) bundle.load_parameters(model.parameters());
         else load_puffer_weights(model, weights_path);
+        if (training) {
+            supervise(model, bundle, train, validation, max_tokens, max_options,
+                batch_size, epochs, learning_rate, seed, save_path);
+            return 0;
+        }
         std::ifstream file;
         if (!input_path.empty()) { file.open(input_path); if (!file) throw std::runtime_error("cannot open --input"); }
         std::istream& input = input_path.empty() ? std::cin : file;
