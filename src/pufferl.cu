@@ -57,8 +57,11 @@ constexpr cublasComputeType_t CUBLAS_COMPUTE = CUBLAS_COMPUTE_32F;
 
 #define PUF_MAX_DIMS 8
 #define BLOCK_SIZE 256
-int grid_size(int N) {
-    return (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+int grid_size(int64_t N) {
+    assert(N >= 0);
+    int64_t blocks = N / BLOCK_SIZE + (N % BLOCK_SIZE != 0);
+    assert(blocks <= INT32_MAX);
+    return (int)blocks;
 }
 
 // Compile vs a single env: -DENV_HEADER=ocean/<env>/<env>.h or .cu (--cu)
@@ -153,8 +156,8 @@ void puf_copy(Prec* dst, Prec* src, cudaStream_t stream) {
 }
 
 __global__ void cast(precision_t* dst,
-        float* src, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        float* src, int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = from_float(src[idx]);
     }
@@ -163,8 +166,8 @@ __global__ void cast(precision_t* dst,
 #ifdef PRECISION_FLOAT
 // GPU envs fix obs as bf16; float train needs an explicit widen.
 __global__ void cast(precision_t* dst,
-        __nv_bfloat16* src, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        __nv_bfloat16* src, int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = __bfloat162float(src[idx]);
     }
@@ -172,16 +175,16 @@ __global__ void cast(precision_t* dst,
 #else
 // Identity overload so obs→rollout cast arm typechecks when obs_t is bf16.
 __global__ void cast(precision_t* dst,
-        precision_t* src, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        precision_t* src, int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = src[idx];
     }
 }
 
 __global__ void cast(float* dst,
-        precision_t* src, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        precision_t* src, int64_t n) {
+    int64_t idx = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = to_float(src[idx]);
     }
@@ -321,6 +324,7 @@ typedef struct {
     bool async;
     bool reset_every_horizon;
     bool cudagraphs;
+    bool distributed_optimizer;
     bool profile;
     int rank;
     int world_size;
@@ -337,6 +341,8 @@ typedef struct {
     int artifact_owner;
     ncclUniqueId* nccl_id;
 } TrainContext;
+
+#include "native_distributed.h"
 
 typedef struct ObsTensor {
     obs_t* data;
@@ -558,6 +564,7 @@ typedef struct PuffeRL {
     Prec grad;
     long* rng_offset;      // device counters (num_buffers+1)
     Profile profile;
+    double* dp_reduce_scratch; // Reused by coordinated training logs.
     nvmlDevice_t nvml_device;
     long epoch;
     long global_step;
@@ -569,7 +576,6 @@ typedef struct PuffeRL {
     int async_write_slot;
     int async_num_slots;  // 2 when async (Cleanba), else 1
     bool async_boot;
-    ulong seed;
     curandStatePhilox4_32_10_t** rng_states;  // per-buffer persistent RNG states [num_buffers]
     char env_name[64];  // For policy arch rebuild at create.
 } PuffeRL;
@@ -1015,6 +1021,19 @@ static Env* puf_vec_create(int, Dict*, obs_t*, float*, float*, float*) {
 }
 #endif
 
+// A bijection of the 32-bit global environment index, keyed by the base seed.
+// Single-GPU jobs retain historical seeds; DP ranks get distinct initial seeds.
+static uint32_t puf_environment_seed(int seed, int rank, int agents_per_rank, int local_env) {
+    uint32_t x = (uint32_t)((uint64_t)rank * agents_per_rank + local_env) + (uint32_t)seed;
+    x ^= x >> 16; x *= UINT32_C(0x7feb352d);
+    x ^= x >> 15; x *= UINT32_C(0x846ca68b);
+    return x ^ (x >> 16);
+}
+
+static uint64_t puf_action_seed(int seed, int rank, int buffers, int buffer) {
+    return (uint64_t)(ulong)seed + (uint64_t)rank * buffers + buffer;
+}
+
 static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
     if (PUF_BACKEND == PUF_GPU) {
         assert(vec->buffers == 1 && "GPU env: num_buffers must be 1");
@@ -1044,7 +1063,8 @@ static void env_setup(PuffeRL* p, VecEnv* vec, Dict* vk, Dict* ek) {
     Env* envs = (Env*)calloc(total_agents, sizeof(Env));
     int agents_created = 0;
     while (agents_created < total_agents) {
-        envs[num_envs].rng = num_envs;
+        envs[num_envs].rng = p->hypers.world_size == 1 ? (uint32_t)num_envs :
+            puf_environment_seed(p->hypers.seed, p->hypers.rank, total_agents, num_envs);
         puf_init(&envs[num_envs], ek);
         agents_created += envs[num_envs].num_agents;
         num_envs++;
@@ -1433,10 +1453,8 @@ static void env_close(VecEnv* vec) {
 #endif
 }
 
-void vec_log(VecEnv* vec, Dict* out, int clear) {
-    Log aggregate = {0};
+static void puf_log_aggregate(Log aggregate, Dict* out) {
     float* acc = (float*)&aggregate;
-    env_log_sum(vec, &aggregate, clear);
 
     float n = aggregate.n;
     Dict env_out = {0};
@@ -1453,6 +1471,56 @@ void vec_log(VecEnv* vec, Dict* out, int clear) {
         dict_set(out, key, env_out.items[i].value);
     }
     dict_clear(&env_out);
+}
+
+void vec_log(VecEnv* vec, Dict* out, int clear) {
+    Log aggregate = {0};
+    env_log_sum(vec, &aggregate, clear);
+    puf_log_aggregate(aggregate, out);
+}
+
+// Logging collectives occur only between completed updates, on every rank.
+// A rank-zero decision synchronizes the wall-clock logging cadence first.
+static void puf_dp_reduce(PuffeRL* p, double* values, int count, ncclRedOp_t op) {
+    if (p->hypers.world_size == 1) return;
+    assert(count <= LOG_NF + NUM_LOSSES + NUM_PROF + 8);
+    cudaStream_t stream = p->train_stream;
+    assert(cudaMemcpyAsync(p->dp_reduce_scratch, values, count * sizeof(double),
+        cudaMemcpyHostToDevice, stream) == cudaSuccess);
+    assert(ncclAllReduce(p->dp_reduce_scratch, p->dp_reduce_scratch,
+        count, ncclDouble, op, p->nccl_comm, stream) == ncclSuccess);
+    assert(cudaMemcpyAsync(values, p->dp_reduce_scratch, count * sizeof(double),
+        cudaMemcpyDeviceToHost, stream) == cudaSuccess);
+    assert(cudaStreamSynchronize(stream) == cudaSuccess);
+}
+
+static bool puf_dp_log_requested(PuffeRL* p, bool requested) {
+    double flag = p->hypers.rank == 0 && requested ? 1 : 0;
+    puf_dp_reduce(p, &flag, 1, ncclMax);
+    return flag != 0;
+}
+
+static void puf_train_log(PuffeRL* p, Dict* out, double* elapsed) {
+    Log aggregate = {};
+    env_log_sum(p->vec, &aggregate, 1);
+    float losses[NUM_LOSSES];
+    assert(cudaMemcpy(losses, p->losses, sizeof(losses), cudaMemcpyDeviceToHost) == cudaSuccess);
+    double sums[LOG_NF + NUM_LOSSES];
+    for (int i = 0; i < LOG_NF; ++i) sums[i] = ((float*)&aggregate)[i];
+    for (int i = 0; i < NUM_LOSSES; ++i) sums[LOG_NF + i] = losses[i];
+    puf_dp_reduce(p, sums, LOG_NF + NUM_LOSSES, ncclSum);
+    for (int i = 0; i < LOG_NF; ++i) ((float*)&aggregate)[i] = sums[i];
+    puf_log_aggregate(aggregate, out);
+    double count = sums[LOG_NF + LOSS_N];
+    for (int i = 0; i < LOSS_N; ++i)
+        dict_set(out, LOSS_NAMES[i], count > 0 ? sums[LOG_NF + i] / count : 0);
+    cudaMemset(p->losses, 0, NUM_LOSSES * sizeof(float));
+    double maxima[NUM_PROF + 1];
+    for (int i = 0; i < NUM_PROF; ++i) maxima[i] = p->profile.accum[i];
+    maxima[NUM_PROF] = *elapsed;
+    puf_dp_reduce(p, maxima, NUM_PROF + 1, ncclMax);
+    for (int i = 0; i < NUM_PROF; ++i) p->profile.accum[i] = maxima[i];
+    *elapsed = maxima[NUM_PROF];
 }
 
 static Prec slice_rows(Prec p, int off, int n) {
@@ -1634,7 +1702,7 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
         muon_step(&pufferl->muon, primary->master_weights,
             pufferl->grad, hypers->max_grad_norm, stream);
         if (USE_BF16) {
-            int n = numel(primary->param.shape);
+            int64_t n = numel(primary->param.shape);
             cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(
                 primary->param.data, primary->master_weights.data, n);
         }
@@ -1822,7 +1890,7 @@ void puf_load_weights_into(Float dst, Prec params,
     cudaMemcpy(dst.data, buf, nbytes, cudaMemcpyHostToDevice);
     free(buf);
     if (USE_BF16) {
-        int n = numel(params.shape);
+        int64_t n = numel(params.shape);
         cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(params.data, dst.data, n);
     }
 }
@@ -1884,6 +1952,7 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .async = puf_ini_get(ini, "base", "async") != 0,
         .reset_every_horizon = puf_ini_get(ini, "base", "reset_every_horizon") != 0,
         .cudagraphs = puf_ini_get(ini, "base", "cudagraphs") >= 0,
+        .distributed_optimizer = puf_ini_get(ini, "train", "distributed_optimizer") != 0,
         .profile = puf_ini_get(ini, "base", "profile") != 0,
         .rank = ctx->rank,
         .world_size = ctx->world_size,
@@ -1891,6 +1960,10 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .num_threads = puf_ini_get(ini, "vec", "num_threads"),
         .seed = puf_ini_get(ini, "base", "seed"),
     };
+    if (hypers.distributed_optimizer && (USE_BF16 || hypers.async || hypers.cudagraphs)) {
+        fprintf(stderr, "distributed_optimizer requires FP32, base.async=0 and base.cudagraphs=-1\n");
+        exit(1);
+    }
 #if defined(PUF_HAS_TRUNCATION) || defined(PUFFER_DECISION_POLICY)
     if (hypers.async || hypers.cudagraphs) {
         fprintf(stderr, "%s currently requires base.async=0 and base.cudagraphs=-1\n", PUFFER_ENV_NAME);
@@ -1906,15 +1979,24 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     pufferl->hypers = hypers;
     snprintf(pufferl->env_name, sizeof(pufferl->env_name), "%s", PUFFER_ENV_NAME);
 
-    cudaSetDevice(hypers.gpu_id);
+    int available_devices = 0;
+    if (cudaGetDeviceCount(&available_devices) != cudaSuccess ||
+            hypers.gpu_id < 0 || hypers.gpu_id >= available_devices) {
+        fprintf(stderr, "rank %d requested CUDA device %d; available devices: %d\n",
+            hypers.rank, hypers.gpu_id, available_devices);
+        exit(1);
+    }
+    assert(cudaSetDevice(hypers.gpu_id) == cudaSuccess);
     cublas_init_handle();
 
     if (hypers.world_size > 1) {
-        ncclCommInitRank(&pufferl->nccl_comm, hypers.world_size, *nccl_id, hypers.rank);
+        assert(nccl_id != nullptr);
+        assert(ncclCommInitRank(&pufferl->nccl_comm, hypers.world_size, *nccl_id,
+            hypers.rank) == ncclSuccess);
         printf("Rank %d/%d: NCCL initialized\n", hypers.rank, hypers.world_size);
+        cudaMalloc((void**)&pufferl->dp_reduce_scratch,
+            (LOG_NF + NUM_LOSSES + NUM_PROF + 8) * sizeof(double));
     }
-
-    pufferl->seed = (ulong)hypers.seed + hypers.rank;
 
     // GPU tensors allocated into pufferl->env; vec aliases them.
     int total_agents = dict_get(&vec_kwargs, "total_agents");
@@ -2087,7 +2169,8 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     cudaMalloc((void**)&pufferl->act_sizes, num_action_heads * sizeof(int));
     cudaMalloc((void**)&pufferl->losses, NUM_LOSSES * sizeof(float));
 
-    muon_init(&pufferl->muon, &primary->params_alloc, hypers.momentum, acts);
+    muon_init(&pufferl->muon, &primary->params_alloc, hypers.momentum, acts,
+        hypers.rank, hypers.world_size, pufferl->nccl_comm, hypers.distributed_optimizer);
 
     // Allocate all policy param/activ pools, then train grads + shared acts.
     for (int b = 0; b < pufferl->num_policies; b++) {
@@ -2138,7 +2221,8 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         cudaMemset(pufferl->rng_states[i], 0,
             agents_per_buf * sizeof(curandStatePhilox4_32_10_t));
         rng_init<<<grid_size(agents_per_buf), BLOCK_SIZE>>>(
-            pufferl->rng_states[i], pufferl->seed + i, agents_per_buf);
+            pufferl->rng_states[i],
+            puf_action_seed(hypers.seed, hypers.rank, num_buffers, i), agents_per_buf);
     }
 
     // Post-create initialization
@@ -3202,7 +3286,8 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         if (epoch == train_epochs - 1 || (checkpoint_interval > 0
                 && (epoch + 1) % checkpoint_interval == 0)) {
             snprintf(saved_checkpoint, sizeof(saved_checkpoint),
-                "%s/%016ld.bin", checkpoint_dir, pufferl->global_step);
+                "%s/%016ld.bin", checkpoint_dir,
+                pufferl->global_step * pufferl->hypers.world_size);
             if (ctx->artifact_owner || use_selfplay) {
                 puf_save_weights(pufferl, saved_checkpoint);
             }
@@ -3228,8 +3313,9 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             }
         }
 
-        if (last_log.size && wall_clock()
-                < pufferl->last_log_time + 0.6 && epoch < train_epochs - 1) {
+        bool should_log = !last_log.size || wall_clock() >= pufferl->last_log_time + 0.6 ||
+            epoch == train_epochs - 1;
+        if (!puf_dp_log_requested(pufferl, should_log)) {
             continue;
         }
 
@@ -3237,6 +3323,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         long global_step = pufferl->global_step;
         double now = wall_clock();
         double dt = now - pufferl->last_log_time;
+        puf_train_log(pufferl, &new_log, &dt);
         double sps = dt > 0 ? (double)(global_step -
             pufferl->last_log_step) / dt * pufferl->hypers.world_size : 0;
         pufferl->last_log_time = now;
@@ -3247,18 +3334,11 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         dict_set(&new_log, "uptime", now - pufferl->start_time);
         dict_set(&new_log, "epoch", (double)pufferl->epoch);
 
-        vec_log(pufferl->vec, &new_log, 1);
-
-        float losses_host[NUM_LOSSES];
-        cudaMemcpy(losses_host, pufferl->losses, sizeof(losses_host),
-            cudaMemcpyDeviceToHost);
-        float inv_n = losses_host[LOSS_N] > 0 ? 1.0f / losses_host[LOSS_N] : 0.0f;
-        for (int i = 0; i < LOSS_N; i++) {
-            dict_set(&new_log, LOSS_NAMES[i], losses_host[i] * inv_n);
-        }
-        cudaMemset(pufferl->losses, 0, NUM_LOSSES * sizeof(float));
-
         log_util(pufferl, &new_log);
+        dict_set(&new_log, "distributed/world_size", pufferl->hypers.world_size);
+        dict_set(&new_log, "distributed/global_minibatch_size",
+            (double)pufferl->hypers.minibatch_size * pufferl->hypers.world_size);
+        dict_set(&new_log, "distributed/optimizer_sharded", pufferl->hypers.distributed_optimizer);
 
         float train_total = 0;
         for (int i = 0; i < NUM_PROF; i++) {
@@ -3493,10 +3573,15 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     return result;
 }
 
-// Fork DP workers before any CUDA/NCCL call (those start runtime threads;
-// fork after that SIGSEGVs children and rank 0 hangs in ncclCommInitRank).
-// Rank 0 generates the NCCL id after fork and pipes it. Sweep trials occupy
-// contiguous GPU blocks; rank 0 owns the last GPU and writes TrainResult.
+static int puf_train_rank(TrainContext* context, void* result, void* user) {
+    if (!context->artifact_owner)
+        assert(freopen("/dev/null", "w", stdout) != nullptr);
+    *(TrainResult*)result = run_train((Ini*)user, context);
+    return 0;
+}
+
+// The parent owns no CUDA context and supervises all ranks, including rank 0.
+// A failed worker terminates its peers instead of leaving a blocked collective.
 TrainResult launch_train(Ini* ini) {
     int mb = puf_ini_get(ini, "train", "minibatch_size");
     int horizon = puf_ini_get(ini, "train", "horizon");
@@ -3520,73 +3605,16 @@ TrainResult launch_train(Ini* ini) {
         puf_ini_put(ini, "base.run_id", buf);
     }
 
-    int nccl_pipe[2] = {-1, -1};
-    if (world_size > 1) {
-        assert(pipe(nccl_pipe) == 0 && "pipe failed");
+    TrainResult* results = (TrainResult*)calloc(world_size, sizeof(TrainResult));
+    assert(results);
+    int status = puf_launch_native_ranks(world_size, gpu_offset, sizeof(TrainResult),
+        results, puf_train_rank, ini);
+    if (status != 0) {
+        fprintf(stderr, "native training rank failed; all workers stopped\n");
+        exit(1);
     }
-
-    int n_workers = world_size - 1;
-    pid_t* pids = (pid_t*)calloc(n_workers, sizeof(pid_t));
-    for (int rank = world_size - 1; rank >= 1; rank--) {
-        pid_t pid = fork();
-        assert(pid >= 0 && "fork failed");
-        if (pid == 0) {
-            close(nccl_pipe[1]);
-            ncclUniqueId nccl_id;
-            assert(read(nccl_pipe[0], &nccl_id, sizeof(nccl_id)) == (ssize_t)sizeof(nccl_id)
-                && "failed to read ncclUniqueId");
-            assert(freopen("/dev/null", "w", stdout) == stdout);
-            TrainContext child = {
-                .rank = rank,
-                .world_size = world_size,
-                .gpu_id = gpu_offset + rank - 1,
-                .artifact_owner = 0,
-                .nccl_id = &nccl_id,
-            };
-            run_train(ini, &child);
-            // Rank 0 may still be in post-train eval. Stay alive until it
-            // closes the pipe; exiting earlier aborts NCCL and poisons rank 0
-            // CUDA graphs (cudaGraphLaunch fails in pufferl_forward).
-            char b;
-            ssize_t n = read(nccl_pipe[0], &b, 1);
-            assert(n >= 0);
-            close(nccl_pipe[0]);
-            puf_ini_free(ini);
-            exit(0);
-        }
-        pids[rank - 1] = pid;
-    }
-
-    ncclUniqueId nccl_id;
-    ncclUniqueId* nccl_ptr = NULL;
-    if (world_size > 1) {
-        close(nccl_pipe[0]);
-        ncclGetUniqueId(&nccl_id);
-        for (int i = 0; i < n_workers; i++) {
-            assert(write(nccl_pipe[1], &nccl_id, sizeof(nccl_id)) == (ssize_t)sizeof(nccl_id)
-                && "failed to write ncclUniqueId");
-        }
-        nccl_ptr = &nccl_id;
-    }
-
-    TrainContext host = {
-        .rank = 0,
-        .world_size = world_size,
-        .gpu_id = gpu_offset + world_size - 1,
-        .artifact_owner = 1,
-        .nccl_id = nccl_ptr,
-    };
-    TrainResult result = run_train(ini, &host);
-    if (world_size > 1) {
-        close(nccl_pipe[1]);
-    }
-    for (int i = 0; i < n_workers; i++) {
-        int status = 0;
-        waitpid(pids[i], &status, 0);
-        assert(WIFEXITED(status) && WEXITSTATUS(status) == 0
-            && "train rank worker failed");
-    }
-    free(pids);
+    TrainResult result = results[0];
+    free(results);
 
     // Sweep parent reads this over the pipe; CLI train ignores (result_fd=0).
     int result_fd = puf_ini_get(ini, "base", "result_fd");

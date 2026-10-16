@@ -13,8 +13,23 @@ struct Changes {
 
 int main(int argc, char** argv) {
     try {
-        if (argc < 3 || argc > 4)
-            throw std::invalid_argument("usage: test_laya_checkpoint BUNDLE PUFFER_CHECKPOINT [INITIAL_SEED=73]");
+        if (argc < 3 || argc > 5)
+            throw std::invalid_argument("usage: test_laya_checkpoint BUNDLE PUFFER_CHECKPOINT [INITIAL_SEED=73] [--zero-init-critic]");
+        uint64_t initial_seed = 73;
+        bool zero_init_critic = false, have_seed = false;
+        for (int i = 3; i < argc; ++i) {
+            if (std::string(argv[i]) == "--zero-init-critic") {
+                if (zero_init_critic) throw std::invalid_argument("duplicate --zero-init-critic");
+                zero_init_critic = true;
+            } else {
+                if (have_seed) throw std::invalid_argument("duplicate initial seed");
+                size_t consumed = 0;
+                initial_seed = std::stoull(argv[i], &consumed);
+                if (consumed != strlen(argv[i]) || argv[i][0] == '-')
+                    throw std::invalid_argument("invalid initial seed");
+                have_seed = true;
+            }
+        }
         pretrained::Bundle bundle(argv[1]);
         pretrained::DecisionConfig config{bundle.encoder, bundle.head_layers, bundle.n_act, true};
         auto registry = pretrained::decision_parameter_specs(config);
@@ -28,12 +43,13 @@ int main(int argc, char** argv) {
             throw std::runtime_error("checkpoint size differs from padded native registry");
         input.seekg(0);
         auto initial = pretrained::new_head_values(registry,
-            argc == 4 ? std::stoull(argv[3]) : 73, bundle.kind != "encoder");
+            initial_seed, bundle.kind != "encoder");
         std::map<std::string, Changes> groups;
         for (size_t index = 0; index < registry.size(); ++index) {
             const auto& p = registry[index];
             bool critic = p.name.compare(0, 11, "value_head.") == 0;
             auto before = initial[index].empty() ? bundle.read_parameter(p.name) : initial[index];
+            if (critic && zero_init_critic) std::fill(before.begin(), before.end(), 0);
             size_t padded = (p.count + 3) & ~size_t(3);
             std::vector<float> after(padded);
             input.read(reinterpret_cast<char*>(after.data()), padded * sizeof(float));
