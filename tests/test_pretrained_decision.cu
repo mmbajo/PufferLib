@@ -3,12 +3,13 @@
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 4, "usage: decision-test weights.bin input.bin output.bin");
+        require(argc == 4 || argc == 5, "usage: decision-test weights.bin input.bin output.bin [fp32|tf32]");
         std::ifstream weights(argv[1], std::ios::binary), input(argv[2], std::ios::binary);
         std::ofstream output(argv[3], std::ios::binary | std::ios::trunc);
         require((bool)weights && (bool)input && (bool)output, "cannot open decision fixture files");
         pretrained::DecisionConfig config;
         config.encoder = load_config(weights);
+        if (argc == 5) config.encoder.gemm_precision = pretrained::parse_gemm_precision(argv[4]);
         require(read_string(input, 8) == std::string("PUFPDI1\0", 8), "invalid decision input magic");
         config.head_layers = read<uint32_t>(input);
         config.n_act = read<uint32_t>(input);

@@ -36,6 +36,8 @@
 
 // Project
 #include "ini.h"
+#include "native_checkpoint_io.h"
+#include "training_metrics.h"
 
 #ifdef PRECISION_FLOAT
 typedef float precision_t;
@@ -306,6 +308,8 @@ typedef struct {
     float min_lr_ratio;
     bool anneal_lr;
     float momentum;
+    PufOptimizerKind optimizer;
+    double adam_beta1, adam_beta2, adam_eps, adam_weight_decay;
     int minibatch_size;
     float replay_ratio;
     long total_timesteps;
@@ -543,6 +547,7 @@ typedef struct PuffeRL {
     Allocator activ_alloc;       // train + primary rollout (shared)
     VecEnv* vec;
     Muon muon;
+    Adam adam;
     ncclComm_t nccl_comm;  // NCCL communicator for multi-GPU
     Hypers hypers;
     bool is_continuous;  // True if all action dimensions are continuous (size==1)
@@ -579,6 +584,55 @@ typedef struct PuffeRL {
     curandStatePhilox4_32_10_t** rng_states;  // per-buffer persistent RNG states [num_buffers]
     char env_name[64];  // For policy arch rebuild at create.
 } PuffeRL;
+
+static float* puf_optimizer_lr(PuffeRL* p) {
+    return p->hypers.optimizer == PUF_OPTIMIZER_ADAM ? p->adam.lr : p->muon.lr;
+}
+
+static void puf_optimizer_step(PuffeRL* p, Float weights, Prec gradients,
+        float max_grad_norm, cudaStream_t stream) {
+    if (p->hypers.optimizer == PUF_OPTIMIZER_ADAM)
+        adam_step(&p->adam, weights, gradients, max_grad_norm, stream);
+    else
+        muon_step(&p->muon, weights, gradients, max_grad_norm, stream);
+}
+
+static PufOptimizerKind puf_optimizer_kind(Ini* ini) {
+    Dict* train = puf_ini_section(ini, "train", 1);
+    DictItem* item = dict_find(train, "optimizer");
+    if (item->str && !item->len) {
+        if (!strcmp(item->str, "muon")) return PUF_OPTIMIZER_MUON;
+        if (!strcmp(item->str, "adam")) return PUF_OPTIMIZER_ADAM;
+    }
+    fprintf(stderr, "train.optimizer must be muon or adam\n");
+    exit(EXIT_FAILURE);
+}
+
+static double puf_adam_option(Ini* ini, const char* name,
+        double minimum, double maximum, bool strict_minimum, bool strict_maximum) {
+    Dict* train = puf_ini_section(ini, "train", 1);
+    DictItem* item = dict_find(train, name);
+    double value = item->value;
+    bool valid = !item->len;
+    if (item->str) {
+        char* end = NULL;
+        errno = 0;
+        value = strtod(item->str, &end);
+        valid = valid && end != item->str && errno != ERANGE;
+        while (end && isspace((unsigned char)*end)) ++end;
+        valid = valid && end && !*end;
+    }
+    valid = valid && std::isfinite(value) && std::isfinite((float)value) &&
+        (strict_minimum ? value > minimum : value >= minimum) &&
+        (strict_maximum ? value < maximum : value <= maximum);
+    if (strict_minimum && minimum == 0) valid = valid && (float)value > 0;
+    if (!valid) {
+        fprintf(stderr, "train.%s must be a finite scalar in %c%g, %g%c representable in FP32\n",
+            name, strict_minimum ? '(' : '[', minimum, maximum, strict_maximum ? ')' : ']');
+        exit(EXIT_FAILURE);
+    }
+    return value;
+}
 
 // Infer path: sample + forward, then vec workers.
 static void profile_begin(const char* tag, bool enable) {
@@ -1699,7 +1753,7 @@ static void train_epoch_gpu(PuffeRL* pufferl, RolloutBuf src, int slot,
                 numel(pufferl->grad.shape), NCCL_PRECISION, ncclAvg,
                 pufferl->nccl_comm, stream);
         }
-        muon_step(&pufferl->muon, primary->master_weights,
+        puf_optimizer_step(pufferl, primary->master_weights,
             pufferl->grad, hypers->max_grad_norm, stream);
         if (USE_BF16) {
             int64_t n = numel(primary->param.shape);
@@ -1718,7 +1772,6 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     int batch_size = hypers->total_agents * hypers->horizon;
     bool anneal_lr = hypers->anneal_lr;
     int current_epoch = pufferl->epoch;
-    Muon* muon = &pufferl->muon;
 
     // Schedule over this rank's train epochs (same as outer loop), not global
     // total_timesteps/batch — multi-GPU would otherwise only traverse 1/W of the
@@ -1727,7 +1780,7 @@ void train_impl(PuffeRL* pufferl, RolloutBuf* src_arg) {
     if (anneal_lr) {
         float lr_min = hypers->min_lr_ratio * hypers->lr;
         float lr = cosine_annealing(hypers->lr, lr_min, current_epoch, total_epochs);
-        cudaMemcpy(muon->lr, &lr, sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(puf_optimizer_lr(pufferl), &lr, sizeof(float), cudaMemcpyHostToDevice);
     }
 
     // Annealed entropy coefficient — same cosine shape as lr. With PG signal
@@ -1881,14 +1934,20 @@ void puf_save_weights(PuffeRL* p, const char* path) {
 void puf_load_weights_into(Float dst, Prec params,
         cudaStream_t stream, const char* path) {
     int64_t nbytes = numel(dst.shape) * sizeof(float);
+    struct stat info{};
+    puf_checkpoint::require(stat(path, &info) == 0 && S_ISREG(info.st_mode) &&
+        info.st_size == nbytes, "weight file must have the exact model size");
     FILE* fp = fopen(path, "rb");
-    assert(fp && "failed to open weights for reading");
-    char* buf = (char*)malloc(nbytes);
-    size_t nread = fread(buf, 1, nbytes, fp);
+    puf_checkpoint::require(fp != nullptr, "failed to open weights for reading");
+    std::vector<float> buf(numel(dst.shape));
+    size_t nread = fread(buf.data(), 1, nbytes, fp);
+    bool complete = (int64_t)nread == nbytes && fgetc(fp) == EOF && !ferror(fp);
     fclose(fp);
-    assert((int64_t)nread == nbytes && "failed to read weights");
-    cudaMemcpy(dst.data, buf, nbytes, cudaMemcpyHostToDevice);
-    free(buf);
+    puf_checkpoint::require(complete, "failed to read exact weight file");
+    for (float value : buf)
+        if (!std::isfinite(value)) puf_checkpoint::require(false, "nonfinite model weights");
+    puf_checkpoint::require(cudaMemcpy(dst.data, buf.data(), nbytes,
+        cudaMemcpyHostToDevice) == cudaSuccess, "failed to upload weights");
     if (USE_BF16) {
         int64_t n = numel(params.shape);
         cast<<<grid_size(n), BLOCK_SIZE, 0, stream>>>(params.data, dst.data, n);
@@ -1901,8 +1960,12 @@ void pufferl_load_policy(PuffeRL* pufferl, int i, const char* path) {
     Policy* pol = &pufferl->policies[i];
     puf_load_weights_into(pol->master_weights, pol->param,
         pufferl->default_stream, path);
+    if (i == 0 && pufferl->hypers.async)
+        puf_copy(&pufferl->actor_param, &pol->param, pufferl->default_stream);
     cudaDeviceSynchronize();
 }
+
+#include "native_checkpoint.cuh"
 
 // fp32 master weights: alias param buffer in float mode; separate fp32 copy in bf16.
 // cast_now: copy param→master now (primary after init). Frozen policies load later.
@@ -1923,6 +1986,9 @@ static void master_weights_setup(Float* mw, Prec* param,
 PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
 #ifdef PUFFER_DECISION_POLICY
     decision_policy_configure(ini);
+#else
+    if (strcmp(puf_ini_get_str(ini, "policy", "gemm_precision"), "fp32"))
+        throw std::invalid_argument("policy.gemm_precision is supported only by imported Transformer policies");
 #endif
     Hypers hypers = {
         .horizon = puf_ini_get(ini, "train", "horizon"),
@@ -1934,6 +2000,11 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .min_lr_ratio = puf_ini_get(ini, "train", "min_lr_ratio"),
         .anneal_lr = puf_ini_get(ini, "train", "anneal_lr") != 0,
         .momentum = puf_ini_get(ini, "train", "momentum"),
+        .optimizer = puf_optimizer_kind(ini),
+        .adam_beta1 = puf_adam_option(ini, "adam_beta1", 0, 1, false, true),
+        .adam_beta2 = puf_adam_option(ini, "adam_beta2", 0, 1, false, true),
+        .adam_eps = puf_adam_option(ini, "adam_eps", 0, INFINITY, true, false),
+        .adam_weight_decay = puf_adam_option(ini, "adam_weight_decay", 0, INFINITY, false, false),
         .minibatch_size = puf_ini_get(ini, "train", "minibatch_size"),
         .replay_ratio = puf_ini_get(ini, "train", "replay_ratio"),
         .total_timesteps = puf_ini_get(ini, "train", "total_timesteps"),
@@ -1960,6 +2031,10 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
         .num_threads = puf_ini_get(ini, "vec", "num_threads"),
         .seed = puf_ini_get(ini, "base", "seed"),
     };
+    if (hypers.optimizer == PUF_OPTIMIZER_ADAM && (USE_BF16 || hypers.distributed_optimizer)) {
+        fprintf(stderr, "Adam requires FP32 and train.distributed_optimizer=0; its moments are replicated\n");
+        exit(1);
+    }
     if (hypers.distributed_optimizer && (USE_BF16 || hypers.async || hypers.cudagraphs)) {
         fprintf(stderr, "distributed_optimizer requires FP32, base.async=0 and base.cudagraphs=-1\n");
         exit(1);
@@ -2169,8 +2244,13 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     cudaMalloc((void**)&pufferl->act_sizes, num_action_heads * sizeof(int));
     cudaMalloc((void**)&pufferl->losses, NUM_LOSSES * sizeof(float));
 
-    muon_init(&pufferl->muon, &primary->params_alloc, hypers.momentum, acts,
-        hypers.rank, hypers.world_size, pufferl->nccl_comm, hypers.distributed_optimizer);
+    if (hypers.optimizer == PUF_OPTIMIZER_ADAM) {
+        adam_init(&pufferl->adam, &primary->params_alloc, hypers.adam_beta1,
+            hypers.adam_beta2, hypers.adam_eps, hypers.adam_weight_decay, acts);
+    } else {
+        muon_init(&pufferl->muon, &primary->params_alloc, hypers.momentum, acts,
+            hypers.rank, hypers.world_size, pufferl->nccl_comm, hypers.distributed_optimizer);
+    }
 
     // Allocate all policy param/activ pools, then train grads + shared acts.
     for (int b = 0; b < pufferl->num_policies; b++) {
@@ -2229,8 +2309,9 @@ PuffeRL* create_pufferl(Ini* ini, TrainContext* ctx) {
     cudaMemcpy(pufferl->act_sizes, act_sizes,
         num_action_heads*sizeof(int), cudaMemcpyHostToDevice);
     cudaMemset(pufferl->losses, 0, NUM_LOSSES * sizeof(float));
-    cudaMemcpy(pufferl->muon.lr, &hypers.lr, sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemset(pufferl->muon.mb.data, 0, numel(pufferl->muon.mb.shape) * sizeof(float));
+    cudaMemcpy(puf_optimizer_lr(pufferl), &hypers.lr, sizeof(float), cudaMemcpyHostToDevice);
+    if (hypers.optimizer == PUF_OPTIMIZER_MUON)
+        cudaMemset(pufferl->muon.mb.data, 0, numel(pufferl->muon.mb.shape) * sizeof(float));
 
 #ifdef PUFFER_NETHACK
     nethack_policy_init(ini);
@@ -2741,6 +2822,12 @@ typedef struct {
 } SweepJob;
 
 void run_sweep(Ini* ini, const char* exe_path) {
+    const char* metrics_path = puf_ini_get_str(ini, "base", "metrics_path");
+    if (*metrics_path && strcmp(metrics_path, "None")) {
+        fprintf(stderr, "sweep does not support base.metrics_path; "
+            "use a separate path per training run\n");
+        exit(1);
+    }
     // Build SweepSpace + param map from [sweep.<section>.<key>] sections.
     const char* goal = puf_ini_get_str(ini, "sweep", "goal");
     assert((strcmp(goal, "maximize") == 0 || strcmp(goal, "minimize") == 0)
@@ -3163,7 +3250,24 @@ EvalResult run_eval(Ini* ini, TrainContext* ctx, int mode, int verbose,
 }
 
 TrainResult run_train(Ini* ini, TrainContext* ctx) {
+    const char* resume_path = puf_ini_get_str(ini, "base", "resume_path");
+    bool resume = resume_path && *resume_path && strcmp(resume_path, "None") != 0;
+    bool save_state = puf_checkpoint::integer_option(ini, "save_training_state", 1) != 0;
+    long stop_after = puf_checkpoint::integer_option(ini, "stop_after_steps", 9007199254740991L);
+    char warm_start_buf[2048];
+    const char* warm_start = puf_checkpoint_path_key(ini, "load_model_path",
+        warm_start_buf, sizeof(warm_start_buf));
+    puf_checkpoint::require(!(resume && warm_start),
+        "resume_path and load_model_path are mutually exclusive");
+    long planned_steps = puf_ini_get(ini, "train", "total_timesteps");
+    long global_batch = (long)puf_ini_get(ini, "vec", "total_agents") *
+        (long)puf_ini_get(ini, "train", "horizon") * ctx->world_size;
+    puf_checkpoint::require(global_batch > 0 && (!stop_after ||
+        (save_state && stop_after <= planned_steps && stop_after % global_batch == 0)),
+        "stop_after_steps requires save_training_state=1 and an aligned step within total_timesteps");
     int use_selfplay = puf_ini_get(ini, "selfplay", "enabled");
+    puf_checkpoint::require(!(use_selfplay && (resume || save_state)),
+        "full training checkpoints do not support selfplay");
     if (!use_selfplay) {
         puf_ini_put(ini, "vec.num_policies", "1");
         puf_ini_put(ini, "vec.hist_policy_percent", "0");
@@ -3204,7 +3308,13 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         mkdir_p(log_dir);
     }
 
+    TrainingMetrics metrics = metrics_open(ctx->artifact_owner ?
+        puf_ini_get_str(ini, "base", "metrics_path") : NULL);
     PuffeRL* pufferl = create_pufferl(ini, ctx);
+    metrics_run(&metrics, ini, ctx->world_size);
+    if (save_state || resume) puf_checkpoint::supported();
+    if (resume) puf_checkpoint::load(pufferl, ini, resume_path);
+    if (warm_start) pufferl_load_policy(pufferl, 0, warm_start);
     Selfplay selfplay = {0};
     if (use_selfplay) {
         char initial_checkpoint[4096];
@@ -3236,6 +3346,9 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
         puf_ini_get(ini, "train", "horizon");
     long local_timesteps = total_timesteps / ctx->world_size;
     long train_epochs = local_timesteps / batch_size;
+    if (stop_after) train_epochs = stop_after / ctx->world_size / batch_size;
+    puf_checkpoint::require(!resume || pufferl->epoch < train_epochs,
+        "checkpoint is already at or beyond the requested stopping step");
     long checkpoint_interval = puf_ini_get(ini, "base", "checkpoint_interval");
     char target_key[128];
     sweep_metric_key(ini, target_key, sizeof(target_key));
@@ -3246,7 +3359,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     TrainResult result = {0};
     char final_checkpoint[4096] = {0};
 
-    for (long epoch = 0; epoch < train_epochs; epoch++) {
+    for (long epoch = pufferl->epoch; epoch < train_epochs; epoch++) {
         if (pufferl->hypers.async) {
             // Cleanba 2-slot: warmup fills slot 0; then collect into write
             // while training the other slot (exactly one epoch old).
@@ -3294,6 +3407,12 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             if (ctx->artifact_owner) {
                 snprintf(final_checkpoint, sizeof(final_checkpoint),
                     "%s", saved_checkpoint);
+            }
+            if (save_state) {
+                char state_checkpoint[4096];
+                snprintf(state_checkpoint, sizeof(state_checkpoint), "%s/%016ld.train",
+                    checkpoint_dir, pufferl->global_step * pufferl->hypers.world_size);
+                puf_checkpoint::save(pufferl, ini, state_checkpoint);
             }
         }
         if (use_selfplay && saved_checkpoint[0]) {
@@ -3358,6 +3477,7 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
             dict_set(&new_log, "pool/num_hist", selfplay.num_hist);
             dict_set(&new_log, "pool/num_policies", pufferl->num_policies);
         }
+        metrics_log(&metrics, &new_log);
         // n=0 logs omit env/*; keep last complete-episode snapshot.
         int episodes = dict_get(&new_log, "env/n") > 0;
         if (ctx->artifact_owner) {
@@ -3570,14 +3690,20 @@ TrainResult run_train(Ini* ini, TrainContext* ctx) {
     }
     free(log_history.items);
     free(selfplay.pool);
+    metrics_close(&metrics);
     return result;
 }
 
 static int puf_train_rank(TrainContext* context, void* result, void* user) {
     if (!context->artifact_owner)
         assert(freopen("/dev/null", "w", stdout) != nullptr);
-    *(TrainResult*)result = run_train((Ini*)user, context);
-    return 0;
+    try {
+        *(TrainResult*)result = run_train((Ini*)user, context);
+        return 0;
+    } catch (const std::exception& error) {
+        fprintf(stderr, "Training rank %d: %s\n", context->rank, error.what());
+        return 1;
+    }
 }
 
 // The parent owns no CUDA context and supervises all ranks, including rank 0.

@@ -27,9 +27,11 @@ struct BenchmarkOptions {
 
 struct BenchmarkResult {
     char gpu[256];
+    char gemm_precision[8];
     int rank, gpu_id, agents, buffers, threads, horizon, minibatch;
     int warmup_updates, updates, padded_tokens;
     bool cuda_graphs, distributed_optimizer;
+    PufOptimizerKind optimizer;
     long long params, steps, token_sum, token_count;
     long long optimizer_momentum_bytes, replicated_optimizer_momentum_bytes;
     long long optimizer_scratch_elements;
@@ -167,13 +169,24 @@ static int benchmark_rank(TrainContext* context, void* destination, void* user) 
         result.minibatch = p->hypers.minibatch_size;
         result.replay_ratio = p->hypers.replay_ratio;
         result.cuda_graphs = p->hypers.cudagraphs;
-        result.distributed_optimizer = p->muon.distributed_optimizer;
-        result.optimizer_momentum_bytes = p->muon.momentum_elems * sizeof(float);
-        result.replicated_optimizer_momentum_bytes = p->policies[0].params_alloc.total_elems * sizeof(float);
-        result.optimizer_scratch_elements = p->muon.scratch_elems;
+        result.optimizer = p->hypers.optimizer;
+        result.distributed_optimizer = p->hypers.distributed_optimizer;
+        if (p->hypers.optimizer == PUF_OPTIMIZER_ADAM) {
+            // Keep the existing moment-storage fields; Adam stores two FP32
+            // moment tensors, both fully replicated on every rank.
+            result.optimizer_momentum_bytes = 2 * p->policies[0].params_alloc.total_elems * sizeof(float);
+            result.replicated_optimizer_momentum_bytes = result.optimizer_momentum_bytes;
+            result.optimizer_scratch_elements = 256 + 1 + 3;
+        } else {
+            result.optimizer_momentum_bytes = p->muon.momentum_elems * sizeof(float);
+            result.replicated_optimizer_momentum_bytes = p->policies[0].params_alloc.total_elems * sizeof(float);
+            result.optimizer_scratch_elements = p->muon.scratch_elems;
+        }
         for (int i = 0; i < NUM_PROF; ++i) result.profile[i] = p->profile.accum[i] / 1000.0;
 #ifdef PUFFER_DECISION_POLICY
         result.padded_tokens = decision_policy_context->execution_tokens;
+        snprintf(result.gemm_precision, sizeof(result.gemm_precision), "%s",
+            pretrained::gemm_precision_name(decision_policy_context->config.encoder.gemm_precision));
 #endif
         if (options.check_replicas) {
             begin = wall_clock(); benchmark_check_replicas(p, control);
@@ -216,7 +229,7 @@ static void benchmark_print(const std::vector<BenchmarkResult>& ranks, bool chec
         for (int i = 0; i < NUM_PROF; ++i)
             aggregate.profile[i] = std::max(aggregate.profile[i], current.profile[i]);
     }
-    printf("BENCHMARK {\"env\":\"%s\",\"gpu\":\"%s\",\"precision\":\"%s\","
+    printf("BENCHMARK {\"env\":\"%s\",\"gpu\":\"%s\",\"precision\":\"%s\",\"optimizer\":\"%s\","
            "\"params\":%lld,\"agents\":%d,\"buffers\":%d,\"threads\":%d,"
            "\"horizon\":%d,\"minibatch\":%d,\"replay_ratio\":%.8g,\"cuda_graphs\":%s,"
            "\"gpus\":%d,\"global_agents\":%lld,\"global_rollout_batch\":%lld,"
@@ -228,7 +241,8 @@ static void benchmark_print(const std::vector<BenchmarkResult>& ranks, bool chec
            "\"replicas_checked\":%s,\"replica_check_seconds\":%.6f,"
            "\"optimizer_momentum_bytes_max_rank\":%lld,\"optimizer_momentum_bytes_total\":%lld,"
            "\"replicated_optimizer_momentum_bytes_per_rank\":%lld",
-           PUFFER_ENV_NAME, first.gpu, USE_BF16 ? "bf16" : "fp32", first.params,
+           PUFFER_ENV_NAME, first.gpu, USE_BF16 ? "bf16" : "fp32",
+           first.optimizer == PUF_OPTIMIZER_ADAM ? "adam" : "muon", first.params,
            first.agents, first.buffers, first.threads, first.horizon, first.minibatch,
            first.replay_ratio, first.cuda_graphs ? "true" : "false", gpus,
            1LL * first.agents * gpus, 1LL * first.agents * first.horizon * gpus,
@@ -239,6 +253,7 @@ static void benchmark_print(const std::vector<BenchmarkResult>& ranks, bool chec
            aggregate.coordination, aggregate.device_used_gib, check_replicas ? "true" : "false",
            aggregate.replica_check, max_momentum, total_momentum,
            first.replicated_optimizer_momentum_bytes);
+    if (first.gemm_precision[0]) printf(",\"gemm_precision\":\"%s\"", first.gemm_precision);
     if (check_replicas) printf(",\"replicas_equal\":true,\"finite_master_weights\":true");
     for (int i = 0; i < NUM_PROF; ++i)
         printf(",\"profile_%s_seconds\":%.6f", PROF_NAMES[i], aggregate.profile[i]);

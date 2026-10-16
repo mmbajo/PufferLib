@@ -56,6 +56,19 @@ class SnakeComparisonTests(unittest.TestCase):
         path.write_text('\n'.join(json.dumps(r) for r in records)+'\n')
         return path
 
+    def test_precision_treatment_requires_explicit_declaration(self):
+        before = self.fixture('fp32-before',
+            changed=lambda rows: rows[0].update(gemm_precision='fp32'))
+        explicit = self.fixture('explicit-fp32', changed=lambda rows: rows[0].update(gemm_precision='fp32'))
+        self.assertEqual(comparison.compare(before, explicit, resamples=1000)['protocol_differences'], {})
+        after = self.fixture('tf32', changed=lambda rows: rows[0].update(gemm_precision='tf32'))
+        with self.assertRaisesRegex(ValueError, 'protocols differ'):
+            comparison.compare(before, after, resamples=1000)
+        result = comparison.compare(before, after, resamples=1000,
+                                    allow_protocol_differences=['gemm_precision'])
+        self.assertEqual(result['protocol_differences'], {'gemm_precision': {'before': 'fp32', 'after': 'tf32'}})
+
+
     def test_self_comparison_has_exact_zero_primary_and_secondary_changes(self):
         path = self.fixture('same', foods=(0, 2, 97), lengths=(12, 500, 250), outcomes=(-1, 0, 1))
         result = comparison.compare(path, path, resamples=1000)

@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <errno.h>
 #include <ctype.h>
+#include <float.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,7 @@ typedef unsigned char obs_t;
 #define PUF_STEPS_PER_SEC 10
 // The core's single terminal buffer cannot represent timeout bootstrapping.
 #define PUF_HAS_TRUNCATION 1
+#define PUF_ENV_STATE 1
 
 // Float-only layout, with n last, is required by PufferLib's log reduction.
 struct Log {
@@ -219,6 +221,138 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "terminated", log->terminated);
     dict_set(out, "truncated", log->truncated);
     dict_set(out, "n", log->n);
+}
+
+// Rollout-boundary state: engine, accumulated log and next episode seed.
+// The collector owns the observations needed before the next environment step.
+enum { PUF_SNAKE_STATE_BYTES = 48 + IB_SNAKE_STATE_BYTES };
+static void puf_snake_state_u32(unsigned char** cursor, uint32_t value) {
+    for (int i = 0; i < 4; ++i) {
+        (*cursor)[i] = (unsigned char)(value >> (8*i));
+    }
+    *cursor += 4;
+}
+static uint32_t puf_snake_state_read_u32(const unsigned char** cursor) {
+    uint32_t value = 0;
+    for (int i = 0; i < 4; ++i) {
+        value |= (uint32_t)(*cursor)[i] << (8*i);
+    }
+    *cursor += 4;
+    return value;
+}
+static void puf_snake_state_float(unsigned char** cursor, float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, 4);
+    puf_snake_state_u32(cursor, bits);
+}
+static float puf_snake_state_read_float(const unsigned char** cursor) {
+    uint32_t bits = puf_snake_state_read_u32(cursor);
+    float value;
+    memcpy(&value, &bits, 4);
+    return value;
+}
+static size_t puf_state_size(const Env* env) {
+    return PUF_SNAKE_STATE_BYTES;
+}
+
+typedef struct EnvState {
+    IBSnake* snake;
+    Log log;
+    uint32_t next_seed;
+} EnvState;
+
+static void puf_state_discard(EnvState* saved) {
+    ib_snake_destroy(saved->snake);
+    saved->snake = NULL;
+}
+
+// The caller owns decoded state until it applies or discards it. Validation
+// never changes the live environment, including when a later record fails.
+static int puf_state_validate(const Env* env, const void* input, size_t bytes,
+        EnvState* saved) {
+    memset(saved, 0, sizeof(*saved));
+    if (!env || !input || bytes != PUF_SNAKE_STATE_BYTES) {
+        return -1;
+    }
+    const unsigned char* data = (const unsigned char*)input;
+    if (memcmp(data, "PUFSNK02", 8)) {
+        return -1;
+    }
+    const unsigned char* cursor = data + 8;
+    if (puf_snake_state_read_u32(&cursor) != 2 ||
+            puf_snake_state_read_u32(&cursor) != bytes) {
+        return -1;
+    }
+    saved->next_seed = puf_snake_state_read_u32(&cursor);
+    float logs[7];
+    for (int i = 0; i < 7; ++i) {
+        logs[i] = puf_snake_state_read_float(&cursor);
+        if (!isfinite(logs[i])) {
+            return -1;
+        }
+    }
+    Log* log = &saved->log;
+    log->perf = logs[0];
+    log->score = logs[1];
+    log->episode_return = logs[2];
+    log->episode_length = logs[3];
+    log->terminated = logs[4];
+    log->truncated = logs[5];
+    log->n = logs[6];
+    double tolerance = 1e-4 * (1.0 + log->n);
+    if (log->n < 0 || log->n != floorf(log->n) ||
+            log->perf < 0 || log->perf > log->n + tolerance ||
+            log->score < 0 || log->score > 97.0 * log->n || log->score != floorf(log->score) ||
+            log->episode_return < -log->n || log->episode_return > 97.0 * log->n ||
+            log->episode_return != floorf(log->episode_return) ||
+            log->episode_length < log->n ||
+            log->episode_length > (double)env->max_steps * log->n ||
+            log->episode_length != floorf(log->episode_length) ||
+            log->terminated < 0 || log->truncated < 0 ||
+            log->terminated != floorf(log->terminated) || log->truncated != floorf(log->truncated) ||
+            fabs((double)log->terminated + log->truncated - log->n) > tolerance) {
+        return -1;
+    }
+    const unsigned char* cap = cursor + 20;
+    if (puf_snake_state_read_u32(&cap) != (uint32_t)env->max_steps) {
+        return -1;
+    }
+    saved->snake = ib_snake_create(0, env->max_steps);
+    if (!saved->snake) {
+        return -1;
+    }
+    if (ib_snake_state_load(saved->snake, cursor, IB_SNAKE_STATE_BYTES)) {
+        puf_state_discard(saved);
+        return -1;
+    }
+    return 0;
+}
+
+static void puf_state_load(Env* env, EnvState* saved) {
+    ib_snake_destroy(env->snake);
+    env->snake = saved->snake;
+    saved->snake = NULL;
+    env->log = saved->log;
+    env->next_seed = saved->next_seed;
+    env->episode_seed = saved->next_seed - UINT32_C(1);
+}
+
+static int puf_state_save(const Env* env, void* output, size_t bytes) {
+    if (!env || !output || bytes != PUF_SNAKE_STATE_BYTES || !env->snake) {
+        return -1;
+    }
+    unsigned char* data = (unsigned char*)output;
+    memcpy(data, "PUFSNK02", 8);
+    unsigned char* cursor = data + 8;
+    puf_snake_state_u32(&cursor, 2);
+    puf_snake_state_u32(&cursor, PUF_SNAKE_STATE_BYTES);
+    puf_snake_state_u32(&cursor, env->next_seed);
+    const float logs[] = {env->log.perf, env->log.score, env->log.episode_return,
+        env->log.episode_length, env->log.terminated, env->log.truncated, env->log.n};
+    for (int i = 0; i < 7; ++i) {
+        puf_snake_state_float(&cursor, logs[i]);
+    }
+    return ib_snake_state_save(env->snake, cursor, IB_SNAKE_STATE_BYTES);
 }
 
 // Define PUF_HEADLESS for standalone tests without a window system.

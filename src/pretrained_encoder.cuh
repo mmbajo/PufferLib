@@ -2,11 +2,31 @@
 #define PUFFER_PRETRAINED_ENCODER_CUH
 
 #include "decision_transformer.cuh"
+#include <stdlib.h>
+#include <string.h>
 
-// Dropout-free FP32 execution of imported encoder weights. This matches the
+// Dropout-free execution with FP32 storage and strict FP32 GEMMs by default.
+// An explicit TF32 option changes GEMM arithmetic only. The default matches the
 // supported Hugging Face models in eval mode; PPO deliberately disables dropout.
 // BertModel's optional pooler is excluded: forward returns all token features.
 namespace pretrained {
+
+// Both modes keep FP32 storage, gradients, reductions and optimizer state.
+enum class GemmPrecision { FP32, TF32 };
+
+inline GemmPrecision parse_gemm_precision(const char* value) {
+    if (!strcmp(value, "fp32")) {
+        return GemmPrecision::FP32;
+    }
+    if (!strcmp(value, "tf32")) {
+        return GemmPrecision::TF32;
+    }
+    throw std::invalid_argument("policy.gemm_precision must be fp32 or tf32");
+}
+
+inline const char* gemm_precision_name(GemmPrecision precision) {
+    return precision == GemmPrecision::TF32 ? "tf32" : "fp32";
+}
 
 struct Config {
     std::string family = "modernbert"; // modernbert, bert, laya_head
@@ -18,6 +38,7 @@ struct Config {
     float global_rope_theta = 160000.0f, local_rope_theta = 10000.0f;
     // Empty uses global_every; otherwise 0=full and 1=sliding for each layer.
     std::vector<int> layer_types;
+    GemmPrecision gemm_precision = GemmPrecision::FP32;
 };
 
 using Parameter = decision::Parameter;
@@ -65,6 +86,15 @@ using decision::transformer_detail::block_sum;
 using decision::transformer_detail::block_max;
 using decision::transformer_detail::grid;
 constexpr int threads = 256;
+
+inline void configure_gemm_precision(cublasHandle_t handle, GemmPrecision precision) {
+    const char* override_value = getenv("NVIDIA_TF32_OVERRIDE");
+    if (precision == GemmPrecision::TF32 && override_value && strcmp(override_value, "1")) {
+        throw std::invalid_argument("tf32 requires NVIDIA_TF32_OVERRIDE to be unset or 1");
+    }
+    blas_check(cublasSetMathMode(handle, precision == GemmPrecision::TF32
+        ? CUBLAS_TF32_TENSOR_OP_MATH : CUBLAS_PEDANTIC_MATH));
+}
 
 inline void validate(const Config& c) {
     if (c.family != "modernbert" && c.family != "bert" && c.family != "laya_head")
@@ -356,7 +386,7 @@ struct Encoder::Impl {
         try {
             detail::blas_check(cublasCreate(&handle));
             detail::blas_check(cublasSetStream(handle, stream));
-            detail::blas_check(cublasSetMathMode(handle, CUBLAS_PEDANTIC_MATH));
+            detail::configure_gemm_precision(handle, cfg.gemm_precision);
             if (allocate_params) {
                 for (auto& p : params) {
                     p.data = allocate<float>(p.count);

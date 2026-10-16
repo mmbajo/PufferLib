@@ -36,6 +36,14 @@ The protocol records `model_init_seed` (default 73), which initializes the added
 critic and, for encoder-only imports, fresh decision heads. The critic is loaded
 but does not select evaluation actions. Keep the initialization seed fixed.
 
+Imported policies accept `--policy.gemm_precision=fp32` (default) or `tf32`.
+Both keep FP32 tensor storage; the latter permits TF32 matrix multiplication
+on compatible GPUs. The protocol records `gemm_precision`. The comparison
+tool compares that recorded field directly and rejects mixed precision
+comparisons unless `--allow-protocol-difference=gemm_precision`
+is explicitly supplied. Use FP32 evaluation for both models when isolating a
+training precision treatment. The numeric board policy supports only FP32 GEMMs.
+
 Build requirements follow the native decision backend: CUDA/cuBLAS/NCCL,
 Raylib from an existing native build, and, for text policies, the tokenizer static
 library built with Rust. Set `CUDA_HOME` or `CUDACXX` and optionally `NVCC_ARCH`;

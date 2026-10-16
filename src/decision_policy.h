@@ -34,7 +34,8 @@ struct DecisionPolicyContext {
     bool zero_init_critic;
     int execution_tokens;
     explicit DecisionPolicyContext(const std::string& source, bool zero_critic = false,
-            int sequence_length = 0)
+            int sequence_length = 0,
+            pretrained::GemmPrecision gemm_precision = pretrained::GemmPrecision::FP32)
         : path(source), bundle(source), tokenizer(bundle.tokenizer_path),
           zero_init_critic(zero_critic),
           execution_tokens(sequence_length ? sequence_length : bundle.max_len) {
@@ -43,6 +44,7 @@ struct DecisionPolicyContext {
         if (execution_tokens < 1 || execution_tokens > bundle.max_len)
             throw std::invalid_argument("policy.sequence_length must be 0 or in [1, bundle.max_len]");
         config.encoder = bundle.encoder;
+        config.encoder.gemm_precision = gemm_precision;
         config.head_layers = bundle.head_layers;
         config.n_act = bundle.n_act;
         config.value_head = true;
@@ -68,11 +70,13 @@ static int decision_policy_integer_option(Ini* ini, const char* key, int maximum
 static void decision_policy_configure(Ini* ini) {
     const bool zero_critic = decision_policy_integer_option(ini, "zero_init_critic", 1) != 0;
     const int sequence_length = decision_policy_integer_option(ini, "sequence_length", DECISION_POLICY_MAX_TOKENS);
+    const auto gemm_precision = pretrained::parse_gemm_precision(
+        puf_ini_get_str(ini, "policy", "gemm_precision"));
     const char* path = puf_ini_get_str(ini, "policy", "bundle");
     if (!path || !*path || strcmp(path, "None") == 0)
         throw std::invalid_argument("decision policy requires --policy.bundle=/path/to/imported-bundle");
     if (!decision_policy_context)
-        decision_policy_context.reset(new DecisionPolicyContext(path, zero_critic, sequence_length));
+        decision_policy_context.reset(new DecisionPolicyContext(path, zero_critic, sequence_length, gemm_precision));
     if (decision_policy_context->path != path)
         throw std::invalid_argument("one process cannot switch decision policy bundles");
     const auto& cfg = decision_policy_context->config.encoder;
