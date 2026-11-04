@@ -24,8 +24,10 @@
 // Layout v2 is fixed (changing it invalidates checkpoints), so it has spare room; see the RG_OBS_*
 // offsets. Actions: verb, direction (for move), slot (a monster or item slot, for attack, pick up and
 // targeted skills) and skill (an index into RG_SKILLS). Attacking and picking up go on over the next
-// steps: the env walks the bot into range first, since rAthena never walks a player there. Action
-// masks rule out reserved verbs, empty slots and skills the bot cannot use right now.
+// steps: the env walks the bot into range first, since rAthena never walks a player there. The
+// monster under attack stays in slot 0, so attacking slot 0 again keeps at it. Action masks rule out
+// reserved verbs, empty slots, skills the bot cannot use right now, potions above 70% HP and sitting
+// while busy.
 
 #include <poll.h>
 #include <sys/file.h>
@@ -401,21 +403,25 @@ static void rg_observe(Env* env, int i) {
             f[4] = rg_skill_ready(c, sk) > 0;
         }
 
-        // The nearest monsters, nearest first, by insertion into a short sorted list.
-        int order[RG_MOBS], dists[RG_MOBS], n = 0;
+        // The monster being attacked first, so that attacking slot 0 keeps at it; then the nearest,
+        // by insertion into a short sorted list.
+        int order[RG_MOBS], keys[RG_MOBS], dists[RG_MOBS], n = 0;
         for (int u = 0; u < c->nunits; u++) {
             if (c->units[u].type != RO_OBJ_MOB) continue;
             int ux, uy;
             ro_unit_pos(c, &c->units[u], &ux, &uy);
             int d = rg_dist(x, y, ux, uy), at = n < RG_MOBS ? n++ : RG_MOBS;
-            if (at == RG_MOBS && d >= dists[RG_MOBS - 1]) continue;
+            int key = b->intent == RG_ATTACKING && c->units[u].id == b->target ? -1 : d;
+            if (at == RG_MOBS && key >= keys[RG_MOBS - 1]) continue;
             if (at == RG_MOBS) at = RG_MOBS - 1;
-            while (at > 0 && dists[at - 1] > d) {
+            while (at > 0 && keys[at - 1] > key) {
                 order[at] = order[at - 1];
+                keys[at] = keys[at - 1];
                 dists[at] = dists[at - 1];
                 at--;
             }
             order[at] = u;
+            keys[at] = key;
             dists[at] = d;
         }
         for (int m = 0; m < n; m++) {
@@ -478,7 +484,8 @@ static void rg_observe(Env* env, int i) {
         if (!any_slot) slots[0] = 1;
         if (!any_skill) skills[0] = 1;
         for (int d = 0; d < 8; d++) dirs[d] = 1;
-        verbs[RG_WAIT] = verbs[RG_MOVE] = verbs[RG_SIT] = 1;
+        verbs[RG_WAIT] = verbs[RG_MOVE] = 1;
+        verbs[RG_SIT] = b->intent == RG_NONE;  // sitting would drop an attack or a pick-up
         verbs[RG_ATTACK] = b->slot_mob[0] != 0;
         verbs[RG_PICKUP] = b->slot_item[0] != 0;
         verbs[RG_POTION] = potion != NULL && c->hp < 0.7 * c->maxhp;  // rg_act drinks only then

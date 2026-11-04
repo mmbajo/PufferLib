@@ -47,7 +47,7 @@ static void scripted(const float* o, float* a, int* heading) {
             if (dot > best_dot) best_dot = dot, best = d;
         }
         a[0] = RG_MOVE; a[1] = best;
-    } else if (survival && !hitting && (self[7] ? hp < 0.9f : hp < 0.6f)) {
+    } else if (survival && !hitting && !self[11] && !self[12] && (self[7] ? hp < 0.9f : hp < 0.6f)) {
         if (!self[7]) a[0] = RG_SIT;  // sit down, or stay seated until healed
     } else if (swordman && magnum >= 0 && near >= 3 && skills[magnum * RG_SKILL_F + 4] > 0) {
         a[0] = RG_SKILL; a[3] = magnum;
