@@ -15,9 +15,9 @@
 // `@rlreset <task>` (server/npc/rl_train.txt) sets its character up for it. The observation starts
 // with a goal vector (the task, its difficulty, the job), so one model learns every task and can be
 // told which to do. Reward: reward_scale x (base exp gained / exp the level needs + reward_job x the
-// same for job exp + reward_death on death), divided by the task's baseline rate so that every task
-// pays the same at its scripted bot's level. perf is exp per step over that baseline (1.0 = as good
-// as the scripted bot), logged per task.
+// same for job exp + reward_death on death), scaled by the task's baseline reward rate so that every
+// task pays the same at its scripted bot's level. perf is exp per step over the scripted bot's
+// (1.0 = as good as it), logged per task.
 //
 // Layout v2 is fixed (changing it invalidates checkpoints), so it has spare room; see the RG_OBS_*
 // offsets. Actions: verb, direction (for move), slot (a monster or item slot, for attack, pick up and
@@ -39,9 +39,11 @@ typedef float obs_t;
 #define RG_TASKS_MAX 16  // goal one-hot width, with room for later tasks
 enum { RG_TASK_FIELD, RG_TASK_SWORD_SKILLS, RG_TASK_SURVIVAL, RG_NTASKS };
 static const char* RG_TASK_NAMES[RG_NTASKS] = {"field", "sword_skills", "survival"};
-// Base exp per step of each task's scripted policy (ragnarok_check, 64 bots, 6,000 steps, job
-// 5005277). Rewards are normalized by these and perf is measured against them.
+// Each task's scripted policy (ragnarok_check, 64 bots, 6,000 steps, job 5005277): its base exp
+// per step, against which perf is measured, and its reward per step (level-normalized exp, deaths
+// included, reward_scale 1), by which rewards are normalized so every task pays the same there.
 static const float RG_TASK_BASELINE[RG_NTASKS] = {0.0312f, 0.419f, 1.19f};
+static const float RG_TASK_REWARD[RG_NTASKS] = {0.00246f, 0.00017f, 0.00097f};
 
 // ---- layout v2 -------------------------------------------------------------------------------
 
@@ -644,7 +646,7 @@ void puf_step(Env* env) {
             if (c->next_job_exp > 0) r += env->reward_job * (float)(job - b->job_seen) / c->next_job_exp;
             int died = c->deaths > b->deaths_seen;
             if (died) r += env->reward_death;
-            r *= env->reward_scale * RG_TASK_BASELINE[RG_TASK_FIELD] / RG_TASK_BASELINE[b->task];
+            r *= env->reward_scale * RG_TASK_REWARD[RG_TASK_FIELD] / RG_TASK_REWARD[b->task];
             b->base_seen = base;
             b->job_seen = job;
             b->deaths_seen = c->deaths;
