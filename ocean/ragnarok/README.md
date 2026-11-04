@@ -104,6 +104,6 @@ Training, field task alone (lr 0.015, reward_scale 1, death −1; perf at a numb
     stocked (see `slurm/README.md`).
 - **G0 passes:** with ent_coef 0.0001 the field policy beats the scripted bot and holds it
   through 400M steps, with about 40 kills and 0.01 deaths per episode against the bot's 36 and 0.1.
-- **G1 does not yet:** in one model on all three tasks, each task falls well short of its
-  single-task run (with ent_coef 0.001: field 0.34–0.67 against 0.91, Swordman skills 0.41–0.52
-  against 0.66, survival 0.45–0.57 against 0.82).
+- **G1 passes:** one model on all three tasks (900M steps, a third of the episodes each) does as
+  well as each task alone (300M steps each): field 1.18 against 1.09, Swordman skills 0.79 against
+  0.77, survival 0.89 against 0.93. The Swordman tasks are still below their scripted bots.
