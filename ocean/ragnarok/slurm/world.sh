@@ -231,7 +231,7 @@ world_stop_all() {
     for d in $WORLD_ROOT/w*; do
         [ -d $d/log ] || continue
         for f in login char map; do
-            [ -f $d/log/$f.out ] && cp $d/log/$f.out $WORLD_LOGS/$(basename $d)-$f-$SLURM_JOB_ID.log
+            [ -f $d/log/$f.out ] && cp $d/log/$f.out $WORLD_LOGS/$(basename $d)-$f-$SLURM_JOB_ID${WORLD_LOG_SUFFIX:-}.log
         done
     done
     if [ -n "${WORLD_DB_PID:-}" ]; then

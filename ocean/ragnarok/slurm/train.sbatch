@@ -5,9 +5,11 @@
 #
 # Submit with slurm/submit.sh [-t TIME] train.sbatch [NWORLDS] [NBOTS] [TIMESTEPS] [RUNS_FILE].
 # RUNS_FILE (optional) lists one run per line as extra ./puffer train arguments; the runs go one
-# after another, each into runs/<job>/<n>. BUILD_FLAGS (optional, e.g. --float for float32 rollout
-# buffers instead of bfloat16) go to build.sh. Training always runs on 002-partition-default with a
-# limit over an hour (your rule, 2026-11-05).
+# after another, each into runs/<job>/<n>, and each on freshly started worlds: a training field
+# changes as it ages, so a run on worlds an earlier run used does not start where that one did
+# (WORLD_FRESH=0 keeps one set of worlds for all runs). BUILD_FLAGS (optional, e.g. --float for
+# float32 rollout buffers instead of bfloat16) go to build.sh. Training always runs on
+# 002-partition-default with a limit over an hour (your rule, 2026-11-05).
 #SBATCH --job-name=ro-train
 #SBATCH --partition=002-partition-default
 #SBATCH --gres=gpu:1
@@ -33,9 +35,11 @@ export WORLD_PORT_BASE=$((10000 + (job % 150) * 200))
 export WORLD_DB_PORT=$((40000 + job % 10000))
 nruns=1
 [ -n "$RUNS_FILE" ] && nruns=$(grep -cvE '^\s*(#|$)' "$RUNS_FILE")
+WORLD_FRESH=${WORLD_FRESH:-1}
 # Every env start claims a fresh block of accounts per world (see ocean/ragnarok/ragnarok.h), and a
 # run starts its envs twice (training, then the final evaluation).
-export WORLD_ACCOUNT_BLOCKS=$((3 * nruns + 2))
+blocks_per_world=$([ "$WORLD_FRESH" = 1 ] && echo 1 || echo $nruns)
+export WORLD_ACCOUNT_BLOCKS=$((3 * blocks_per_world + 2))
 PUF=${PUF:-/home/user02198/ragnarok/PufferLib}  # a frozen worktree can be passed in
 export RG=$PUF/ocean/ragnarok
 source $RG/slurm/world.sh
@@ -60,13 +64,15 @@ if ldd $RATHENA/map-server | grep -q "not found" && LD_LIBRARY_PATH=$RO/lib ldd 
 fi
 trap 'world_stop_all; exit 0' TERM INT
 
-world_db_start || { world_stop_all; exit 5; }
-t0=$SECONDS
-for w in $(seq 0 $((NWORLDS - 1))); do
-    world_create $w $NBOTS > /dev/null || { world_stop_all; exit 5; }
-    world_start $w > /dev/null || { wlog "world $w did not start"; world_stop_all; exit 5; }
-done
-wlog "$NWORLDS worlds up in $((SECONDS - t0))s"
+start_worlds() {
+    world_db_start || return 1
+    local t0=$SECONDS w
+    for w in $(seq 0 $((NWORLDS - 1))); do
+        world_create $w $NBOTS > /dev/null || return 1
+        world_start $w > /dev/null || { wlog "world $w did not start"; return 1; }
+    done
+    wlog "$NWORLDS worlds up in $((SECONDS - t0))s"
+}
 
 mkdir -p $RUN
 if [ -n "$RUNS_FILE" ]; then
@@ -74,26 +80,34 @@ if [ -n "$RUNS_FILE" ]; then
 else
     echo "" > $RUN/runs.txt
 fi
-export RO_WORLD_ROOT=$WORLD_ROOT RO_DB_DIR=$RATHENA/db RO_WORLD_PORT_BASE=$WORLD_PORT_BASE
-srun --container-image=$IMG \
-    --container-mounts=/home/user02198/ragnarok:/home/user02198/ragnarok,/lustre/users/user02198/ragnarok:/lustre/users/user02198/ragnarok,$WORLD_ROOT:$WORLD_ROOT \
-    --container-workdir=$PUF bash -s <<RUN
-export CCACHE_DIR=/tmp/ccache-$job
-./build.sh ragnarok ${BUILD_FLAGS:-} > $RUN/build.log 2>&1 || { tail -20 $RUN/build.log; exit 1; }
+MOUNTS=/home/user02198/ragnarok:/home/user02198/ragnarok,/lustre/users/user02198/ragnarok:/lustre/users/user02198/ragnarok
+srun --container-image=$IMG --container-mounts=$MOUNTS --container-workdir=$PUF \
+    bash -c "CCACHE_DIR=/tmp/ccache-$job ./build.sh ragnarok ${BUILD_FLAGS:-} > $RUN/build.log 2>&1" \
+    || { tail -20 $RUN/build.log; exit 1; }
+status=0
 n=0
-while IFS= read -r args; do
-    n=\$((n + 1))
-    mkdir -p $RUN/\$n
-    echo "\$(date '+%F %T') run \$n: \$args" | tee $RUN/\$n/args.txt
-    ./puffer train --vec.total_agents=$((NWORLDS * NBOTS)) --vec.num_threads=$NWORLDS \
-        --env.num_agents=$NBOTS --train.total_timesteps=$TIMESTEPS \
-        --base.checkpoint_dir=$RUN/\$n/checkpoints --base.log_dir=$RUN/\$n/logs \$args \
-        > $RUN/\$n/train.log 2>&1
-    echo "\$(date '+%F %T') run \$n exited with \$?"
-done < $RUN/runs.txt
-RUN
-status=$?
+while IFS= read -r args <&3; do
+    n=$((n + 1))
+    if [ $n = 1 ] || [ "$WORLD_FRESH" = 1 ]; then
+        if [ $n -gt 1 ]; then
+            WORLD_LOG_SUFFIX=-run$((n - 1)) world_stop_all
+            sleep 2
+        fi
+        start_worlds || { world_stop_all; exit 5; }
+    fi
+    export RO_WORLD_ROOT=$WORLD_ROOT RO_DB_DIR=$RATHENA/db RO_WORLD_PORT_BASE=$WORLD_PORT_BASE
+    mkdir -p $RUN/$n
+    echo "$(date '+%F %T') run $n: $args" | tee $RUN/$n/args.txt
+    srun --container-image=$IMG --container-mounts=$MOUNTS,$WORLD_ROOT:$WORLD_ROOT --container-workdir=$PUF \
+        bash -c "./puffer train --vec.total_agents=$((NWORLDS * NBOTS)) --vec.num_threads=$NWORLDS \
+            --env.num_agents=$NBOTS --train.total_timesteps=$TIMESTEPS \
+            --base.checkpoint_dir=$RUN/$n/checkpoints --base.log_dir=$RUN/$n/logs $args \
+            > $RUN/$n/train.log 2>&1"
+    rc=$?
+    [ $rc = 0 ] || status=$rc
+    echo "$(date '+%F %T') run $n exited with $rc"
+    world_alive || wlog "a server process died during run $n"
+done 3< $RUN/runs.txt
 wlog "trainer runs done, status $status"
-world_alive || wlog "a server process died during the runs"
 world_stop_all
 exit $status
