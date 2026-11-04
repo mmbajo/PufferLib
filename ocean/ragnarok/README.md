@@ -86,11 +86,19 @@ one GPU job on one node
 | Lockstep, 8 lean worlds of 64 bots, 20 CPUs | 470,000 to 550,000 | |
 | Training: 16 worlds of 64 bots, one H100, 64 CPUs | about 1,000,000 | 500M steps in 9 minutes |
 
-First training runs:
-- **Field task alone:** the policy reaches 0.88 of the scripted bot's exp per step at 30M steps.
-  It then drifts back toward random: its entropy rises while its KL falls to zero.
-- **All three tasks in one model** (100M steps, about 850,000 steps/s):
-  - field: about 0.9 of its baseline;
-  - Swordman skills and survival: about 0.25 each, though the policy does use skills, about 21 per
-    episode;
-  - deaths per episode fall from 1.0 to 0.17.
+Training, field task alone (lr 0.015, ent_coef 0.001, reward_scale 1, death −1):
+
+| perf at | 30M steps | 100M | 200M | 300M | final eval |
+|---|---|---|---|---|---|
+| Shared worlds, old masks | 0.86 | 0.80 | 0.49 | 0.30 | 0.16 |
+| Fresh worlds per run, monsters kept spread, new masks | 0.87 | 0.96 | 0.92 | 0.90 | 0.91 |
+
+- **The early runs declined because the bots herded the monsters.**
+  - A monster that is hit chases the bot that hit it, and stays where it loses track when that bot
+    is reset elsewhere.
+  - A policy that starts fights and walks off gathers the field's monsters into a few clumps over
+    hours of game time. The count stays the same, but most of the map empties.
+  - A later run on the same worlds started on that empty field and never learned.
+  - Every run now gets fresh worlds, and `server/npc/rl_spread.txt` keeps the task maps evenly
+    stocked (see `slurm/README.md`).
+- **The field policy holds at about 0.9 of the scripted bot but does not beat it yet.**
