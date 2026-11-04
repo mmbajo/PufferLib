@@ -1,0 +1,10 @@
+# G0 grid: one trainer run per line (extra ./puffer train arguments). Line 1 repeats the settings
+# of job 5004782 as the control.
+--env.reward_scale=1 --env.reward_death=-1.0 --train.learning_rate=0.015 --train.ent_coef=0.001
+--env.reward_scale=10 --env.reward_death=-0.2 --train.learning_rate=0.015 --train.ent_coef=0.001
+--env.reward_scale=10 --env.reward_death=-0.2 --train.learning_rate=0.005 --train.ent_coef=0.001
+--env.reward_scale=10 --env.reward_death=-0.2 --train.learning_rate=0.005 --train.ent_coef=0.0001
+--env.reward_scale=100 --env.reward_death=-0.2 --train.learning_rate=0.005 --train.ent_coef=0.001
+--env.reward_scale=10 --env.reward_death=-0.2 --train.learning_rate=0.005 --train.ent_coef=0.001 --policy.hidden_size=512
+--env.reward_scale=10 --env.reward_death=-1.0 --train.learning_rate=0.005 --train.ent_coef=0.001
+--env.reward_scale=1 --env.reward_death=-1.0 --train.learning_rate=0.005 --train.ent_coef=0.0001

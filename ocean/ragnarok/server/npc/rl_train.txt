@@ -1,0 +1,60 @@
+//===== Training worlds only (local script, not part of rAthena) =====
+// @rlreset <task> turns the caller into a fresh character for one episode of that task: alive with
+// full HP and SP, no status effects, the task's job, levels, stats, skills and gear, then a random
+// cell of the task's map. train/world.sh loads this only into throwaway training worlds, where every
+// bot may use it. Tasks (the env's RG_TASK_* in PufferLib/ocean/ragnarok/ragnarok.h):
+//   0  field leveling: Novice, levels 1/1, Main Gauche, Cotton Shirt, 30 Red Potions; prt_fild08
+//   1  Swordman skills: Swordman, levels 25/25, STR 50 AGI 30 VIT 30 DEX 20, Bash 10, Magnum
+//      Break 5, Sword Mastery 10, Increase HP Recovery 5, Blade, Padded Armor, 30 Red Potions;
+//      pay_fild01 (Spores)
+//   2  survival: the same Swordman on pay_fild02 (Wolves, which help each other)
+-	script	rl_train	-1,{
+OnInit:
+	bindatcmd "rlreset", strnpcinfo(3) + "::OnReset", 0, 99;
+	end;
+
+OnReset:
+	.@task = atoi(.@atcmd_parameters$[0]);
+	recovery 0;
+	sc_end SC_ALL;
+	clearitem;
+	if (.@task == 1 || .@task == 2) {
+		if (Class != Job_Swordman)
+			jobchange Job_Swordman;
+		resetlvl 1;
+		resetskill;
+		BaseLevel = 25;
+		JobLevel = 25;
+		statusup2 bStr, 49;
+		statusup2 bAgi, 29;
+		statusup2 bVit, 29;
+		statusup2 bDex, 19;
+		StatusPoint = 0;
+		SkillPoint = 0;
+		skill 5, 10, 0;
+		skill 7, 5, 0;
+		skill 2, 10, 0;
+		skill 4, 5, 0;
+		getitem 1109, 1;
+		getitem 2312, 1;
+		getitem 501, 30;
+		equip 1109;
+		equip 2312;
+		.@map$ = .@task == 1 ? "pay_fild01" : "pay_fild02";
+	} else {
+		if (Class != Job_Novice)
+			jobchange Job_Novice;
+		resetlvl 1;
+		resetskill;
+		getitem 1207, 1;
+		getitem 2301, 1;
+		getitem 501, 30;
+		equip 1207;
+		equip 2301;
+		.@map$ = "prt_fild08";
+	}
+	percentheal 100, 100;
+	savepoint .@map$, 0, 0;
+	warp .@map$, 0, 0;
+	end;
+}
