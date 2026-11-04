@@ -198,6 +198,10 @@ elif [ "$ENV" = "nethack" ]; then
                -I./$NLE_DIR/build/_deps/deboost_context-src/include)
     EXTRA_LDFLAGS+=(-L"$NETHACK_LIB_DIR" -lnethack
                     -Xlinker -rpath -Xlinker "$NETHACK_LIB_DIR" -ldl)
+elif [ "$ENV" = "ragnarok" ]; then
+    # Bots on rAthena servers through ~/ragnarok/bot/rathena_client.h, which needs zlib.
+    SRC_DIR="ocean/$ENV"
+    EXTRA_LDFLAGS+=(-lz)
 elif [ -d "ocean/$ENV" ]; then
     SRC_DIR="ocean/$ENV"
 else

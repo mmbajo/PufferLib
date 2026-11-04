@@ -1,0 +1,388 @@
+From 342934319ea55fe64849e7d95c44945e2ae9862c Mon Sep 17 00:00:00 2001
+From: mmbajo <markarjaybajo@gmail.com>
+Date: Thu, 5 Nov 2026 00:51:07 +0900
+Subject: [PATCH 2/3] feat(lockstep): let training clients step the map server
+ clock
+
+---
+ src/common/timer.cpp      |  38 ++++++++++++-
+ src/common/timer.hpp      |   6 +++
+ src/map/clif.cpp          |  22 +++++++-
+ src/map/clif.hpp          |   3 ++
+ src/map/clif_packetdb.hpp |   4 ++
+ src/map/lockstep.cpp      | 111 ++++++++++++++++++++++++++++++++++++++
+ src/map/lockstep.hpp      |  18 +++++++
+ src/map/map.cpp           |  16 ++++++
+ src/map/map.hpp           |   1 +
+ src/map/pc.hpp            |   5 ++
+ 10 files changed, 222 insertions(+), 2 deletions(-)
+ create mode 100644 src/map/lockstep.cpp
+ create mode 100644 src/map/lockstep.hpp
+
+diff --git a/src/common/timer.cpp b/src/common/timer.cpp
+index 562ceaa..7ec5f10 100644
+--- a/src/common/timer.cpp
++++ b/src/common/timer.cpp
+@@ -144,7 +144,7 @@ static void rdtsc_calibrate(){
+ #endif
+ 
+ /// platform-abstracted tick retrieval
+-static t_tick tick(void)
++static t_tick tick_real(void)
+ {
+ #if defined(ENABLE_RDTSC)
+ 	// RDTSC: Returns the number of CPU cycles since reset. Unreliable if the CPU frequency is variable.
+@@ -166,6 +166,34 @@ static t_tick tick(void)
+ #endif
+ }
+ 
++// Lockstep: the clock is frozen at lockstep_now once engaged.
++static bool lockstep_engaged = false;
++static t_tick lockstep_now = 0;
++
++static t_tick tick(void)
++{
++	return lockstep_engaged ? lockstep_now : tick_real();
++}
++
++void timer_lockstep_engage(void)
++{
++	if( !lockstep_engaged ){
++		lockstep_now = tick_real();
++		lockstep_engaged = true;
++	}
++}
++
++bool timer_lockstep_engaged(void)
++{
++	return lockstep_engaged;
++}
++
++void timer_lockstep_set(t_tick tick)
++{
++	if( DIFF_TICK(tick, lockstep_now) > 0 )
++		lockstep_now = tick;
++}
++
+ //////////////////////////////////////////////////////////////////////////
+ #if defined(TICK_CACHE) && TICK_CACHE > 1
+ //////////////////////////////////////////////////////////////////////////
+@@ -411,6 +439,14 @@ t_tick do_timer(t_tick tick)
+ 	return cap_value(diff, TIMER_MIN_INTERVAL, TIMER_MAX_INTERVAL);
+ }
+ 
++/// Due tick of the earliest timer, or -1 when there is none.
++t_tick timer_next_due(void)
++{
++	if( BHEAP_LENGTH(timer_heap) == 0 )
++		return -1;
++	return timer_data[BHEAP_PEEK(timer_heap)].tick;
++}
++
+ unsigned long get_uptime(void)
+ {
+ 	return (unsigned long)difftime(time(nullptr), start_time);
+diff --git a/src/common/timer.hpp b/src/common/timer.hpp
+index d5a0719..bf14774 100644
+--- a/src/common/timer.hpp
++++ b/src/common/timer.hpp
+@@ -69,6 +69,12 @@ void split_time(int32 time, int32* year, int32* month, int32* day, int32* hour,
+ double solve_time(char* modif_p);
+ 
+ t_tick do_timer(t_tick tick);
++// Lockstep clock (local patch for training bots). Once engaged, gettick() stands still and only
++// timer_lockstep_set() moves it; until then it follows the wall clock as usual.
++void timer_lockstep_engage(void);
++bool timer_lockstep_engaged(void);
++void timer_lockstep_set(t_tick tick);
++t_tick timer_next_due(void);
+ void timer_init(void);
+ void timer_final(void);
+ 
+diff --git a/src/map/clif.cpp b/src/map/clif.cpp
+index 8306054..4f04c73 100644
+--- a/src/map/clif.cpp
++++ b/src/map/clif.cpp
+@@ -41,6 +41,7 @@
+ #include "instance.hpp"
+ #include "intif.hpp"
+ #include "itemdb.hpp"
++#include "lockstep.hpp"
+ #include "log.hpp"
+ #include "mail.hpp"
+ #include "map.hpp"
+@@ -10745,6 +10746,25 @@ void clif_parse_WantToConnection(int32 fd, map_session_data* sd)
+ 
+ /// Notification from the client, that it has finished map loading and is about to display player's character (CZ_NOTIFY_ACTORINIT).
+ /// 007d
++/// 0cf0 (CZ_LOCKSTEP_READY): the client has sent its actions for the coming step.
++/// Local patch for training bots, see lockstep.cpp.
++void clif_parse_LockstepReady( int32 fd, map_session_data* sd ){
++	lockstep_ready( *sd );
++}
++
++/// 0cf1 <step>.L <tick>.L (ZC_LOCKSTEP_DONE): everything a step produced has been sent.
++void clif_lockstep_done( map_session_data& sd, uint32 step, t_tick tick ){
++	int32 fd = sd.fd;
++
++	if( !session_isActive( fd ) )
++		return;
++	WFIFOHEAD( fd, 10 );
++	WFIFOW( fd, 0 ) = 0x0cf1;
++	WFIFOL( fd, 2 ) = step;
++	WFIFOL( fd, 6 ) = (uint32)tick;
++	WFIFOSET( fd, 10 );
++}
++
+ void clif_parse_LoadEndAck(int32 fd,map_session_data *sd)
+ {
+ 	bool guild_notice = false;
+@@ -25791,7 +25811,7 @@ static int32 clif_parse(int32 fd)
+ 		if( !sd && packet_db[cmd].func != clif_parse_WantToConnection )
+ 			; //Only valid packet when there is no session
+ 		else
+-		if( sd && sd->prev == nullptr && packet_db[cmd].func != clif_parse_LoadEndAck )
++		if( sd && sd->prev == nullptr && packet_db[cmd].func != clif_parse_LoadEndAck && packet_db[cmd].func != clif_parse_LockstepReady )
+ 			; //Only valid packet when player is not on a map
+ 		else
+ 			packet_db[cmd].func(fd, sd);
+diff --git a/src/map/clif.hpp b/src/map/clif.hpp
+index 4752a22..51f90cc 100644
+--- a/src/map/clif.hpp
++++ b/src/map/clif.hpp
+@@ -949,6 +949,9 @@ void clif_playBGM( const map_session_data& sd, const char* name );
+ void clif_soundeffect( const block_list& bl, const char* name, int32 type, enum send_target target );
+ void clif_parse_ActionRequest_sub( map_session_data& sd, uint8 action_type, int32 target_id, t_tick tick );
+ void clif_parse_LoadEndAck( int32 fd,map_session_data* sd );
++// Lockstep (local patch, see lockstep.cpp): CZ_LOCKSTEP_READY in, ZC_LOCKSTEP_DONE out.
++void clif_parse_LockstepReady( int32 fd, map_session_data* sd );
++void clif_lockstep_done( map_session_data& sd, uint32 step, t_tick tick );
+ void clif_hotkeys_send( const map_session_data* sd, int32 tab );
+ 
+ // trade
+diff --git a/src/map/clif_packetdb.hpp b/src/map/clif_packetdb.hpp
+index 79cf8ca..c42bd86 100644
+--- a/src/map/clif_packetdb.hpp
++++ b/src/map/clif_packetdb.hpp
+@@ -2046,4 +2046,8 @@
+ 	parseable_packet( HEADER_CZ_MOVE_ITEM_TO_PERSONAL, sizeof( PACKET_CZ_MOVE_ITEM_TO_PERSONAL ), clif_parse_MoveFromKafraFav, 0 );
+ #endif
+ 
++	// Lockstep stepping for training bots (local patch, see lockstep.cpp).
++	parseable_packet( 0x0cf0, 2, clif_parse_LockstepReady, 0 );
++	packet( 0x0cf1, 10 );
++
+ #endif /* CLIF_PACKETDB_HPP */
+diff --git a/src/map/lockstep.cpp b/src/map/lockstep.cpp
+new file mode 100644
+index 0000000..7339a5c
+--- /dev/null
++++ b/src/map/lockstep.cpp
+@@ -0,0 +1,111 @@
++// Lockstep stepping for training bots. Local patch, not part of upstream rAthena.
++//
++// With `lockstep: yes` in the map config, the clock follows the wall clock until the first client
++// sends CZ_LOCKSTEP_READY (0x0cf0). From then on it stands still between steps. A session that has
++// sent READY once is a member. A step runs when every member has sent READY since the last step:
++// the server runs the next lockstep_step ms of game time one timer at a time, so each timer sees
++// its own due time, then sends every member ZC_LOCKSTEP_DONE (0x0cf1: steps so far, server tick),
++// after everything else the step produced. Between steps the server keeps handling sockets in real
++// time, so logins and the char-server link work while the clients think. A member that sends no
++// READY for lockstep_timeout seconds of wall-clock time stops being one, so a dead client cannot
++// freeze the world.
++
++#include "lockstep.hpp"
++
++#include <ctime>
++
++#include <common/showmsg.hpp>
++#include <common/socket.hpp>
++
++#include "clif.hpp"
++#include "map.hpp"
++#include "pc.hpp"
++
++bool lockstep_enabled = false;
++int32 lockstep_step_ms = 100;
++int32 lockstep_timeout = 30;
++bool lockstep_debug = false;
++
++static uint32 lockstep_steps = 0;
++
++void lockstep_ready( map_session_data& sd ){
++	if( !lockstep_enabled )
++		return;
++	if( !timer_lockstep_engaged() ){
++		timer_lockstep_engage();
++		ShowStatus( "Lockstep engaged by '%s': %d ms of game time per step.\n", sd.status.name, lockstep_step_ms );
++	}
++	sd.lockstep_member = true;
++	sd.lockstep_pending = true;
++
++	static int32 debug_readies = 0;
++	if( lockstep_debug && ++debug_readies <= 10 )
++		ShowDebug( "Lockstep: READY %d from '%s' (account %u, on a map: %s)\n", debug_readies, sd.status.name, sd.status.account_id, sd.prev != nullptr ? "yes" : "no" );
++}
++
++// True when there is at least one member and every member is ready. Drops members that timed out.
++static bool lockstep_all_ready(){
++	bool any = false, all = true;
++	time_t now = time( nullptr );
++	s_mapiterator* iter = mapit_getallusers();
++
++	for( map_session_data* sd = (map_session_data*)mapit_first( iter ); mapit_exists( iter ); sd = (map_session_data*)mapit_next( iter ) ){
++		if( !sd->lockstep_member )
++			continue;
++		if( !sd->lockstep_pending ){
++			if( now - sd->lockstep_since > lockstep_timeout ){
++				ShowWarning( "Lockstep: '%s' sent no READY for %d s; no longer waiting for it.\n", sd->status.name, lockstep_timeout );
++				sd->lockstep_member = false;
++				continue;
++			}
++			all = false;
++		}
++		any = true;
++	}
++	mapit_free( iter );
++
++	static int32 debug_calls = 0;
++	if( lockstep_debug && ++debug_calls % 2000 == 1 )
++		ShowDebug( "Lockstep: barrier check %d: members %s, all ready %s, steps run %u\n", debug_calls, any ? "yes" : "no", all ? "yes" : "no", lockstep_steps );
++
++	return any && all;
++}
++
++static void lockstep_run_step(){
++	t_tick target = gettick() + lockstep_step_ms;
++
++	for( t_tick due = timer_next_due(); due >= 0 && DIFF_TICK( due, target ) <= 0; due = timer_next_due() ){
++		timer_lockstep_set( due );
++		do_timer( gettick() );
++	}
++	timer_lockstep_set( target );
++	do_timer( target );
++	lockstep_steps++;
++	if( lockstep_debug && ( lockstep_steps <= 3 || lockstep_steps % 1000 == 0 ) )
++		ShowDebug( "Lockstep: step %u done at tick %" PRtf "\n", lockstep_steps, target );
++
++	time_t now = time( nullptr );
++	s_mapiterator* iter = mapit_getallusers();
++
++	for( map_session_data* sd = (map_session_data*)mapit_first( iter ); mapit_exists( iter ); sd = (map_session_data*)mapit_next( iter ) ){
++		if( !sd->lockstep_member )
++			continue;
++		sd->lockstep_pending = false;
++		sd->lockstep_since = now;
++		clif_lockstep_done( *sd, lockstep_steps, target );
++	}
++	mapit_free( iter );
++}
++
++void lockstep_handle_main( t_tick next ){
++	if( !timer_lockstep_engaged() ){
++		do_sockets( next );
++		return;
++	}
++	if( lockstep_all_ready() ){
++		lockstep_run_step();
++		do_sockets( 0 );
++	}else{
++		do_sockets( 5 );
++	}
++}
+diff --git a/src/map/lockstep.hpp b/src/map/lockstep.hpp
+new file mode 100644
+index 0000000..1f7ff65
+--- /dev/null
++++ b/src/map/lockstep.hpp
+@@ -0,0 +1,18 @@
++// Lockstep stepping for training bots. Local patch, not part of upstream rAthena.
++#ifndef MAP_LOCKSTEP_HPP
++#define MAP_LOCKSTEP_HPP
++
++#include <common/cbasetypes.hpp>
++#include <common/timer.hpp>
++
++class map_session_data;
++
++extern bool lockstep_enabled;   // map config "lockstep"
++extern int32 lockstep_step_ms;  // map config "lockstep_step": game time per step, ms
++extern int32 lockstep_timeout;  // map config "lockstep_timeout": wall-clock seconds to wait for a READY
++extern bool lockstep_debug;     // map config "lockstep_debug": log barrier checks and the first steps
++
++void lockstep_ready( map_session_data& sd );
++void lockstep_handle_main( t_tick next );
++
++#endif /* MAP_LOCKSTEP_HPP */
+diff --git a/src/map/map.cpp b/src/map/map.cpp
+index 37f58a6..bb7e046 100644
+--- a/src/map/map.cpp
++++ b/src/map/map.cpp
+@@ -39,6 +39,7 @@
+ #include "homunculus.hpp"
+ #include "instance.hpp"
+ #include "intif.hpp"
++#include "lockstep.hpp"
+ #include "log.hpp"
+ #include "mapreg.hpp"
+ #include "mercenary.hpp"
+@@ -4171,6 +4172,14 @@ int32 map_config_read(const char *cfgName)
+ 			npc_addsrcfile(w2, false);
+ 		else if (strcmpi(w1, "delnpc") == 0)
+ 			npc_delsrcfile(w2);
++		else if (strcmpi(w1, "lockstep") == 0)
++			lockstep_enabled = config_switch(w2) != 0;
++		else if (strcmpi(w1, "lockstep_step") == 0)
++			lockstep_step_ms = cap_value(atoi(w2), 1, 10000);
++		else if (strcmpi(w1, "lockstep_timeout") == 0)
++			lockstep_timeout = cap_value(atoi(w2), 1, 86400);
++		else if (strcmpi(w1, "lockstep_debug") == 0)
++			lockstep_debug = config_switch(w2) != 0;
+ 		else if (strcmpi(w1, "autosave_time") == 0) {
+ 			autosave_interval = atoi(w2);
+ 			if (autosave_interval < 1) //Revert to default saving.
+@@ -5119,6 +5128,13 @@ static int32 map_abort_sub(map_session_data* sd, va_list ap)
+ // Function called when the server
+ // has received a crash signal.
+ //------------------------------
++void MapServer::handle_main( t_tick next ){
++	if( lockstep_enabled )
++		lockstep_handle_main( next );
++	else
++		Core::handle_main( next );
++}
++
+ void MapServer::handle_crash(){
+ 	static int32 run = 0;
+ 	//Save all characters and then flush the inter-connection.
+diff --git a/src/map/map.hpp b/src/map/map.hpp
+index d32f752..2b22fe5 100644
+--- a/src/map/map.hpp
++++ b/src/map/map.hpp
+@@ -34,6 +34,7 @@ class MapServer : public Core{
+ 		void finalize() override;
+ 		void handle_crash() override;
+ 		void handle_shutdown() override;
++		void handle_main( t_tick next ) override;
+ 
+ 	public:
+ 		MapServer() : Core( e_core_type::MAP ){
+diff --git a/src/map/pc.hpp b/src/map/pc.hpp
+index 4cb5e93..5b13cf3 100644
+--- a/src/map/pc.hpp
++++ b/src/map/pc.hpp
+@@ -380,6 +380,11 @@ struct s_qi_display {
+ 
+ class map_session_data : public block_list {
+ public:
++	// Lockstep (local patch, see lockstep.cpp): in the step barrier, READY received for the coming
++	// step, and since when the server has been waiting for it (wall clock).
++	bool lockstep_member = false;
++	bool lockstep_pending = false;
++	time_t lockstep_since = 0;
+ 	struct unit_data ud;
+ 	struct view_data vd;
+ 	struct status_data base_status, battle_status;
+-- 
+2.34.1
+

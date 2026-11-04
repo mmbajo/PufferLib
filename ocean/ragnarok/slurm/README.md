@@ -1,0 +1,51 @@
+# Training worlds
+
+Throwaway rAthena worlds for bots, started inside Slurm jobs and deleted when the jobs end. They
+never touch the play server. Submit every job with `./submit.sh`, which keeps off the nodes this
+account already uses; job output and server logs go to `~/ragnarok/train/logs`.
+
+| File | What |
+|---|---|
+| `world.sh` | Library sourced by the jobs: one MariaDB per job, then any number of worlds, each with its own ports (7000+10W, 7001+10W, 7002+10W on 127.0.0.1), database and bot accounts. Passwords are random per job and never printed. |
+| `test-bot.sbatch NBOTS MINUTES DIE_AFTER` | One world with scripted bots; the first bot is a GM and types `@die` once. `MODE=lockstep` (pass `--export=ALL,MODE=lockstep`) uses the lockstep build. |
+| `bench-worlds.sbatch NWORLDS NBOTS MINUTES RESET` | Lean lockstep worlds side by side, for throughput. Give it 2 CPUs per world plus a few (`./submit.sh -c 20 ...` for 8 worlds). |
+| `build-train.sbatch` | Builds `~/ragnarok/rathena-train` (branch `local/lockstep`): the play server's client version plus the lockstep patch and 8192 connections per server. |
+| `env-check.sbatch NBOTS STEPS` | The PufferLib env without the trainer (`ocean/ragnarok/ragnarok_check`): random actions, then the scripted policy through the env's own actions. |
+| `build-env.sbatch` | Builds the env's trainer (for H100) and `--cpu` binary in the toolchain container on a CPU node, to catch compile errors before a GPU job. |
+| `train.sbatch NWORLDS NBOTS TIMESTEPS` | Training on one GPU: the worlds on the node, the trainer in the toolchain container; checkpoints and logs in `/lustre/users/user02198/ragnarok/runs/<job>`. Runs on `002-partition-default` with a 24 h limit (training always uses the default partition, with limits over an hour); `-t` on `submit.sh` changes the limit. |
+| `build_image.sbatch`, `smoke.sbatch`, `probe.sbatch` | The toolchain image (CUDA 12.2, clang 15) and its checks; see `TOOLCHAIN.md`. |
+
+The scripts that lean worlds load are in `../server/npc/`: `rl_train.txt` (`@rlreset`, the episode
+reset) and `field_dense.txt` (extra monsters). The rAthena patches are in `../server/patches/`.
+
+## World settings
+
+- New characters start on `prt_fild08` (200,200) with a Main Gauche worn, a Cotton Shirt and 30
+  Red Potions; rates are rAthena's defaults (1x), as on your server.
+- Flood protection lets 127.0.0.1 through (it bans an address after 5 connections in 3 s), idle
+  connections last 300 s, and SQL logging is off.
+- `WORLD_LEAN=1` loads only the training field, its monsters and `npc/*.txt`: a world starts in
+  about 2 s and its map server uses about 40 MB.
+- Lockstep worlds (`lockstep: yes`) keep the clock still until every bot has sent READY, then run
+  100 ms of game time. Autosave is every hour of game time.
+
+## Results so far (2026-11-05)
+
+| Run | Bots | Game time | Wall time | Bot steps/s | Notes |
+|---|---|---|---|---|---|
+| Real time, one world | 4 | 10 min | 10 min | 40 | 226 kills, 1,180 base exp per bot-hour |
+| Lockstep, one world | 4 | 10 min | 0.9 s | 26,800 | 230 kills, 1,086 base exp per bot-hour (same game, within noise) |
+| Lockstep, one world | 64 | 10 min | 6.0 s | 63,800 | |
+| Lockstep, 8 lean worlds, 20 CPUs | 8 x 64 | 10 min | about 5.6 s | 549,000 in total | `@rlreset` every 2 game minutes |
+| Same, with 2.7x the easy monsters | 8 x 64 | 10 min | about 6.5 s | 473,000 in total | 1,100 base exp per bot-hour again, as with 4 bots |
+| Env, scripted policy, one world | 64 | 10 min | 6.1 s | 62,600 | 33 base exp per 2-minute episode, as the scripted bot |
+| Training, 16 worlds, 1 H100, 64 CPUs | 16 x 64 | | 100M steps in about 100 s | about 1,000,000 | 0 to 14 kills per 5-minute episode by 30M steps, then flat (job 5004735) |
+| Same, potions only below 70% HP | 16 x 64 | | 500M steps in 9 min | about 1,000,000 | perf 0.88 of the scripted bot at 30M steps, then down to 0.40 by 500M; deaths and potion use fall too (job 5004782) |
+
+## Lockstep lessons
+
+- A bot's first READY can miss the step that is running; `ro_lockstep_join()` handles that, and
+  `ro_lockstep_step_all()` targets the step after the newest DONE any bot has seen.
+- A world whose bots are all gone steps itself in real time, or logouts would never finish.
+- rAthena keeps a logged-out account "online" for a while; a second run on the same world should
+  use other accounts (`RG_ACCOUNT_OFFSET`).

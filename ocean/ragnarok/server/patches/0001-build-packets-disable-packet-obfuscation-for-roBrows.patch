@@ -1,0 +1,26 @@
+From f4f44785b1e3ad6c0172047ebc97a2b8f0749f64 Mon Sep 17 00:00:00 2001
+From: mmbajo <markarjaybajo@gmail.com>
+Date: Wed, 4 Nov 2026 18:52:53 +0900
+Subject: [PATCH 1/3] build(packets): disable packet obfuscation for roBrowser
+ and bot clients
+
+---
+ src/config/packets.hpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/config/packets.hpp b/src/config/packets.hpp
+index b216feb..7607697 100644
+--- a/src/config/packets.hpp
++++ b/src/config/packets.hpp
+@@ -45,7 +45,7 @@
+ 	/// Comment to disable the official packet obfuscation support.
+ 	/// This requires PACKETVER 2011-08-17 or newer.
+ 	#ifndef PACKET_OBFUSCATION
+-		#define PACKET_OBFUSCATION
++		//#define PACKET_OBFUSCATION
+ 
+ 		// Define these inside src/custom/defines_pre.hpp or src/custom/defines_post.hpp
+ 		//#define PACKET_OBFUSCATION_KEY1 <key1>
+-- 
+2.34.1
+

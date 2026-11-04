@@ -1,0 +1,122 @@
+From 31490ec24c9a2208838989f79d2a9ee2b950926c Mon Sep 17 00:00:00 2001
+From: mmbajo <markarjaybajo@gmail.com>
+Date: Thu, 5 Nov 2026 01:17:50 +0900
+Subject: [PATCH 3/3] fix(lockstep): keep empty worlds running and skip
+ departing sessions
+
+---
+ src/common/timer.cpp |  5 +++++
+ src/common/timer.hpp |  1 +
+ src/map/lockstep.cpp | 28 +++++++++++++++++++++-------
+ 3 files changed, 27 insertions(+), 7 deletions(-)
+
+diff --git a/src/common/timer.cpp b/src/common/timer.cpp
+index 7ec5f10..3553396 100644
+--- a/src/common/timer.cpp
++++ b/src/common/timer.cpp
+@@ -183,6 +183,11 @@ void timer_lockstep_engage(void)
+ 	}
+ }
+ 
++t_tick timer_tick_real(void)
++{
++	return tick_real();
++}
++
+ bool timer_lockstep_engaged(void)
+ {
+ 	return lockstep_engaged;
+diff --git a/src/common/timer.hpp b/src/common/timer.hpp
+index bf14774..31465c8 100644
+--- a/src/common/timer.hpp
++++ b/src/common/timer.hpp
+@@ -75,6 +75,7 @@ void timer_lockstep_engage(void);
+ bool timer_lockstep_engaged(void);
+ void timer_lockstep_set(t_tick tick);
+ t_tick timer_next_due(void);
++t_tick timer_tick_real(void);
+ void timer_init(void);
+ void timer_final(void);
+ 
+diff --git a/src/map/lockstep.cpp b/src/map/lockstep.cpp
+index 7339a5c..fd9e7e2 100644
+--- a/src/map/lockstep.cpp
++++ b/src/map/lockstep.cpp
+@@ -8,7 +8,8 @@
+ // after everything else the step produced. Between steps the server keeps handling sockets in real
+ // time, so logins and the char-server link work while the clients think. A member that sends no
+ // READY for lockstep_timeout seconds of wall-clock time stops being one, so a dead client cannot
+-// freeze the world.
++// freeze the world. With no members at all (every bot gone), the server steps on its own at
++// real-time pace, so logouts and saves still finish and the bots can log in again.
+ 
+ #include "lockstep.hpp"
+ 
+@@ -28,6 +29,11 @@ bool lockstep_debug = false;
+ 
+ static uint32 lockstep_steps = 0;
+ 
++// A member still counts while connected and on this server; one that is logging out does not.
++static bool lockstep_counts( const map_session_data& sd ){
++	return sd.lockstep_member && sd.state.active && session_isActive( sd.fd );
++}
++
+ void lockstep_ready( map_session_data& sd ){
+ 	if( !lockstep_enabled )
+ 		return;
+@@ -43,14 +49,15 @@ void lockstep_ready( map_session_data& sd ){
+ 		ShowDebug( "Lockstep: READY %d from '%s' (account %u, on a map: %s)\n", debug_readies, sd.status.name, sd.status.account_id, sd.prev != nullptr ? "yes" : "no" );
+ }
+ 
+-// True when there is at least one member and every member is ready. Drops members that timed out.
+-static bool lockstep_all_ready(){
++// 1 when there is at least one member and every member is ready, 0 while some member is not,
++// -1 when there are no members. Drops members that timed out.
++static int32 lockstep_barrier(){
+ 	bool any = false, all = true;
+ 	time_t now = time( nullptr );
+ 	s_mapiterator* iter = mapit_getallusers();
+ 
+ 	for( map_session_data* sd = (map_session_data*)mapit_first( iter ); mapit_exists( iter ); sd = (map_session_data*)mapit_next( iter ) ){
+-		if( !sd->lockstep_member )
++		if( !lockstep_counts( *sd ) )
+ 			continue;
+ 		if( !sd->lockstep_pending ){
+ 			if( now - sd->lockstep_since > lockstep_timeout ){
+@@ -68,7 +75,7 @@ static bool lockstep_all_ready(){
+ 	if( lockstep_debug && ++debug_calls % 2000 == 1 )
+ 		ShowDebug( "Lockstep: barrier check %d: members %s, all ready %s, steps run %u\n", debug_calls, any ? "yes" : "no", all ? "yes" : "no", lockstep_steps );
+ 
+-	return any && all;
++	return !any ? -1 : all ? 1 : 0;
+ }
+ 
+ static void lockstep_run_step(){
+@@ -88,7 +95,7 @@ static void lockstep_run_step(){
+ 	s_mapiterator* iter = mapit_getallusers();
+ 
+ 	for( map_session_data* sd = (map_session_data*)mapit_first( iter ); mapit_exists( iter ); sd = (map_session_data*)mapit_next( iter ) ){
+-		if( !sd->lockstep_member )
++		if( !lockstep_counts( *sd ) )
+ 			continue;
+ 		sd->lockstep_pending = false;
+ 		sd->lockstep_since = now;
+@@ -102,7 +109,14 @@ void lockstep_handle_main( t_tick next ){
+ 		do_sockets( next );
+ 		return;
+ 	}
+-	if( lockstep_all_ready() ){
++	static t_tick last_unattended = 0;
++	int32 barrier = lockstep_barrier();
++
++	if( barrier > 0 ){
++		lockstep_run_step();
++		do_sockets( 0 );
++	}else if( barrier < 0 && DIFF_TICK( timer_tick_real(), last_unattended ) >= lockstep_step_ms ){
++		last_unattended = timer_tick_real();
+ 		lockstep_run_step();
+ 		do_sockets( 0 );
+ 	}else{
+-- 
+2.34.1
+
