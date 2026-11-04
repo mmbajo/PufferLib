@@ -55,7 +55,7 @@ static const float RG_TASK_REWARD[RG_NTASKS] = {0.00246f, 0.00017f, 0.00097f};
 #define RG_SIGHT 14.0f
 
 #define RG_GOAL_F (RG_TASKS_MAX + 4 + 8)  // task one-hot, 4 difficulty values, job one-hot
-#define RG_SELF_F 16
+#define RG_SELF_F 20
 #define RG_CAST_F 4
 #define RG_SKILL_F 5
 #define RG_MOB_F 21
@@ -115,6 +115,8 @@ struct Log {
     float picked;
     float base_exp;
     float skills;
+    float mobs_seen;  // monsters in sight per step
+    float edge;       // distance to the nearest map edge, as a fraction of half the map
     float task_perf[RG_LOG_TASKS];
     float task_n[RG_LOG_TASKS];
     float n;
@@ -132,7 +134,7 @@ typedef struct RgBot {
     // This episode.
     int steps, kills0, potions0, picked0, skills0;
     int64_t base0;
-    float ret;
+    float ret, mobs_seen, edge;
 } RgBot;
 
 struct Env {
@@ -361,6 +363,15 @@ static void rg_observe(Env* env, int i) {
         s[13] = env->episode_steps > 0 ? (float)b->steps / env->episode_steps : 0;
         s[14] = c->maxhp / 1000.0f;
         s[15] = c->maxsp / 500.0f;
+        // Where on the map, and how many monsters are in sight: without these, bots sharing one
+        // policy can all drift the same way into a corner.
+        if (c->cells) {
+            s[16] = (float)x / c->cells->xs;
+            s[17] = (float)y / c->cells->ys;
+        }
+        int seen = 0;
+        for (int u = 0; u < c->nunits; u++) seen += c->units[u].type == RO_OBJ_MOB;
+        s[18] = seen / 8.0f;
         float* k = o + RG_OBS_CAST;
         k[0] = c->cast_until > c->now;
         k[1] = c->cast_until > c->now ? (float)(c->cast_until - c->now) / 2000.0f : 0;
@@ -471,6 +482,7 @@ static void rg_begin_episode(RgBot* b) {
     RoClient* c = &b->c;
     b->steps = 0;
     b->ret = 0;
+    b->mobs_seen = b->edge = 0;
     b->kills0 = c->kills;
     b->potions0 = c->potions;
     b->picked0 = c->picked;
@@ -511,6 +523,8 @@ static void rg_end_episode(Env* env, RgBot* b) {
     env->log.picked += c->picked - b->picked0;
     env->log.skills += c->skills_used - b->skills0;
     env->log.base_exp += (float)(ro_total_base_exp(c) - b->base0);
+    env->log.mobs_seen += b->steps > 0 ? b->mobs_seen / b->steps : 0;
+    env->log.edge += b->steps > 0 ? b->edge / b->steps : 0;
     env->log.deaths += c->dead;
     if (b->task < RG_LOG_TASKS) {
         env->log.task_perf[b->task] += perf;
@@ -644,14 +658,26 @@ void puf_step(Env* env) {
             int64_t base = ro_total_base_exp(c), job = ro_total_job_exp(c);
             if (c->next_base_exp > 0) r += (float)(base - b->base_seen) / c->next_base_exp;
             if (c->next_job_exp > 0) r += env->reward_job * (float)(job - b->job_seen) / c->next_job_exp;
+            // Exp is scaled per task so every task pays the same at its baseline; a death costs the
+            // same everywhere.
+            r *= RG_TASK_REWARD[RG_TASK_FIELD] / RG_TASK_REWARD[b->task];
             int died = c->deaths > b->deaths_seen;
             if (died) r += env->reward_death;
-            r *= env->reward_scale * RG_TASK_REWARD[RG_TASK_FIELD] / RG_TASK_REWARD[b->task];
+            r *= env->reward_scale;
             b->base_seen = base;
             b->job_seen = job;
             b->deaths_seen = c->deaths;
             b->ret += r;
             b->steps++;
+            int x, y, seen = 0;
+            ro_self_pos(c, &x, &y);
+            for (int u = 0; u < c->nunits; u++) seen += c->units[u].type == RO_OBJ_MOB;
+            b->mobs_seen += seen;
+            if (c->cells) {
+                int ex = x < c->cells->xs - 1 - x ? x : c->cells->xs - 1 - x;
+                int ey = y < c->cells->ys - 1 - y ? y : c->cells->ys - 1 - y;
+                b->edge += 2.0f * (ex < ey ? ex : ey) / (c->cells->xs < c->cells->ys ? c->cells->xs : c->cells->ys);
+            }
             done = died || (env->episode_steps > 0 && b->steps >= env->episode_steps);
         }
         env->agents[i].rewards[0] = r;
@@ -727,6 +753,8 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "picked", log->picked);
     dict_set(out, "base_exp", log->base_exp);
     dict_set(out, "skills", log->skills);
+    dict_set(out, "mobs_seen", log->mobs_seen);
+    dict_set(out, "edge", log->edge);
     // Per task: the trainer divides every field by n, which leaves these ratios as they are.
     for (int t = 0; t < RG_NTASKS && t < RG_LOG_TASKS; t++) {
         if (log->task_n[t] <= 0) continue;

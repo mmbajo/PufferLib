@@ -32,8 +32,9 @@ export WORLD_PORT_BASE=$((10000 + (job % 150) * 200))
 export WORLD_DB_PORT=$((40000 + job % 10000))
 nruns=1
 [ -n "$RUNS_FILE" ] && nruns=$(grep -cvE '^\s*(#|$)' "$RUNS_FILE")
-# Every trainer start claims a fresh block of accounts per world (see ocean/ragnarok/ragnarok.h).
-export WORLD_ACCOUNT_BLOCKS=$((nruns + 2))
+# Every env start claims a fresh block of accounts per world (see ocean/ragnarok/ragnarok.h), and a
+# run starts its envs twice (training, then the final evaluation).
+export WORLD_ACCOUNT_BLOCKS=$((3 * nruns + 2))
 PUF=${PUF:-/home/user02198/ragnarok/PufferLib}  # a frozen worktree can be passed in
 export RG=$PUF/ocean/ragnarok
 source $RG/slurm/world.sh
