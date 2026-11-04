@@ -86,12 +86,13 @@ one GPU job on one node
 | Lockstep, 8 lean worlds of 64 bots, 20 CPUs | 470,000 to 550,000 | |
 | Training: 16 worlds of 64 bots, one H100, 64 CPUs | about 1,000,000 | 500M steps in 9 minutes |
 
-Training, field task alone (lr 0.015, ent_coef 0.001, reward_scale 1, death −1):
+Training, field task alone (lr 0.015, reward_scale 1, death −1; perf at a number of world steps):
 
-| perf at | 30M steps | 100M | 200M | 300M | final eval |
+| Setup | 30M | 100M | 200M | 300M | final eval |
 |---|---|---|---|---|---|
-| Shared worlds, old masks | 0.86 | 0.80 | 0.49 | 0.30 | 0.16 |
-| Fresh worlds per run, monsters kept spread, new masks | 0.87 | 0.96 | 0.92 | 0.90 | 0.91 |
+| Shared worlds, old masks, ent_coef 0.001 | 0.86 | 0.81 | 0.53 | 0.28 | 0.16 |
+| Fresh worlds per run, monsters kept spread, new masks | 0.88 | 1.00 | 0.92 | 0.92 | 0.91 |
+| Same, ent_coef 0.0001 (two seeds), the defaults now | 1.04–1.08 | 1.02–1.07 | 1.00–1.04 | 1.04–1.05 | 1.06–1.12 |
 
 - **The early runs declined because the bots herded the monsters.**
   - A monster that is hit chases the bot that hit it, and stays where it loses track when that bot
@@ -101,4 +102,8 @@ Training, field task alone (lr 0.015, ent_coef 0.001, reward_scale 1, death −1
   - A later run on the same worlds started on that empty field and never learned.
   - Every run now gets fresh worlds, and `server/npc/rl_spread.txt` keeps the task maps evenly
     stocked (see `slurm/README.md`).
-- **The field policy holds at about 0.9 of the scripted bot but does not beat it yet.**
+- **G0 passes:** with ent_coef 0.0001 the field policy beats the scripted bot and holds it
+  through 400M steps, with about 40 kills and 0.01 deaths per episode against the bot's 36 and 0.1.
+- **G1 does not yet:** in one model on all three tasks, each task falls well short of its
+  single-task run (with ent_coef 0.001: field 0.34–0.67 against 0.91, Swordman skills 0.41–0.52
+  against 0.66, survival 0.45–0.57 against 0.82).
