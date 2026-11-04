@@ -25,6 +25,7 @@ node=$(hostname -s)
 job=$SLURM_JOB_ID
 export RATHENA=/home/user02198/ragnarok/rathena-train
 export WORLD_LEAN=1
+export WORLD_MAPS=${WORLD_MAPS:-"prt_fild08 pay_fild01 pay_fild02"}  # every task's map
 export WORLD_MAP_CONF=$'lockstep: yes\nautosave_time: 3600'
 # Ports and the database port per job, so two training jobs can share a node.
 export WORLD_PORT_BASE=$((10000 + (job % 150) * 200))

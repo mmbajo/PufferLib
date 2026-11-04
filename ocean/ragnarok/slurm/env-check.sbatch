@@ -1,7 +1,7 @@
 #!/bin/bash
 # M5 check without the trainer: one lean lockstep world and NBOTS bots driven through the PufferLib
 # env (ocean/ragnarok/ragnarok.h, via ragnarok_check), first with random actions for STEPS steps,
-# then with the scripted policy for 10x as many (on the next block of accounts). Submit with slurm/submit.sh env-check.sbatch [NBOTS] [STEPS].
+# then the scripted policy on each task for 10x as many steps (each run on its own accounts). Submit with slurm/submit.sh env-check.sbatch [NBOTS] [STEPS].
 #SBATCH --job-name=ro-env-check
 #SBATCH --partition=002-partition-cpu
 #SBATCH --cpus-per-task=8
@@ -17,7 +17,8 @@ node=$(hostname -s)
 job=$SLURM_JOB_ID
 export RATHENA=/home/user02198/ragnarok/rathena-train
 export WORLD_LEAN=1
-export WORLD_ACCOUNT_BLOCKS=2  # each env start claims its own block of accounts
+export WORLD_ACCOUNT_BLOCKS=5  # each env start claims its own block of accounts
+export WORLD_MAPS="prt_fild08 pay_fild01 pay_fild02"  # every task's map
 export WORLD_MAP_CONF=$'lockstep: yes\nlockstep_debug: yes\nautosave_time: 3600'
 RG=${RG:-/home/user02198/ragnarok/PufferLib/ocean/ragnarok}
 source $RG/slurm/world.sh
@@ -34,11 +35,12 @@ world_start 0 || { world_stop_all; exit 5; }
 export RO_WORLD_ROOT=$WORLD_ROOT RO_DB_DIR=$RATHENA/db
 CHECK=$RG/ragnarok_check
 export RG_DEBUG=1
-$CHECK $NBOTS $STEPS random
-s1=$?
-$CHECK $NBOTS $((STEPS * 10)) scripted
-s2=$?
-wlog "random exited $s1, scripted exited $s2"
+status=0
+$CHECK $NBOTS $STEPS random mix || status=1
+for task in 0 1 2; do
+    $CHECK $NBOTS $((STEPS * 10)) scripted $task || status=1
+done
+wlog "env checks exited with $status"
 world_alive || wlog "a server process died during the run"
 world_stop_all
-exit $((s1 + s2))
+exit $status

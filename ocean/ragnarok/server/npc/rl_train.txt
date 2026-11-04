@@ -7,7 +7,8 @@
 //   1  Swordman skills: Swordman, levels 25/25, STR 50 AGI 30 VIT 30 DEX 20, Bash 10, Magnum
 //      Break 5, Sword Mastery 10, Increase HP Recovery 5, Blade, Padded Armor, 30 Red Potions;
 //      pay_fild01 (Spores)
-//   2  survival: the same Swordman on pay_fild02 (Wolves, which help each other)
+//   2  survival: a weaker Swordman (levels 18/18, STR 35 AGI 20 VIT 15 DEX 15, the same skills and
+//      gear, 10 Red Potions) on pay_fild02 among Wolves (level 25), which help each other
 -	script	rl_train	-1,{
 OnInit:
 	bindatcmd "rlreset", strnpcinfo(3) + "::OnReset", 0, 99;
@@ -23,12 +24,24 @@ OnReset:
 			jobchange Job_Swordman;
 		resetlvl 1;
 		resetskill;
-		BaseLevel = 25;
-		JobLevel = 25;
-		statusup2 bStr, 49;
-		statusup2 bAgi, 29;
-		statusup2 bVit, 29;
-		statusup2 bDex, 19;
+		if (.@task == 1) {
+			BaseLevel = 25;
+			JobLevel = 25;
+			statusup2 bStr, 49;
+			statusup2 bAgi, 29;
+			statusup2 bVit, 29;
+			statusup2 bDex, 19;
+			getitem 501, 30;
+		} else {
+			// Weaker than the wolves, so pulling a pack, or fighting on at low HP, gets it killed.
+			BaseLevel = 18;
+			JobLevel = 18;
+			statusup2 bStr, 34;
+			statusup2 bAgi, 19;
+			statusup2 bVit, 14;
+			statusup2 bDex, 14;
+			getitem 501, 10;
+		}
 		StatusPoint = 0;
 		SkillPoint = 0;
 		skill 5, 10, 0;
@@ -37,7 +50,6 @@ OnReset:
 		skill 4, 5, 0;
 		getitem 1109, 1;
 		getitem 2312, 1;
-		getitem 501, 30;
 		equip 1109;
 		equip 2312;
 		.@map$ = .@task == 1 ? "pay_fild01" : "pay_fild02";
