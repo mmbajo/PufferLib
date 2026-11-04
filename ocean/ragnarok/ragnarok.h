@@ -127,6 +127,7 @@ struct Log {
     float act_wait, act_move, act_attack, act_pickup, act_potion, act_sit, act_skill;
     float task_perf[RG_LOG_TASKS];
     float task_n[RG_LOG_TASKS];
+    float task_w[RG_LOG_TASKS];  // nonzero for the tasks in the mix, so their keys are always logged
     float n;
 };
 
@@ -559,6 +560,7 @@ static void rg_end_episode(Env* env, RgBot* b) {
         env->log.task_perf[b->task] += perf;
         env->log.task_n[b->task] += 1;
     }
+    for (int t = 0; t < RG_NTASKS && t < RG_LOG_TASKS; t++) env->log.task_w[t] = env->task_weight[t] > 0;
     env->log.n += 1;
     rg_start_reset(env, b);
 }
@@ -818,12 +820,14 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "act_potion", log->act_potion);
     dict_set(out, "act_sit", log->act_sit);
     dict_set(out, "act_skill", log->act_skill);
-    // Per task: the trainer divides every field by n, which leaves these ratios as they are.
+    // Per task: the trainer divides every field by n, which leaves these ratios as they are. Every task
+    // in the mix logs its keys in every interval (0 if none of its episodes ended there), since the
+    // trainer's final metrics expect the same keys in every interval.
     for (int t = 0; t < RG_NTASKS && t < RG_LOG_TASKS; t++) {
-        if (log->task_n[t] <= 0) continue;
+        if (log->task_w[t] <= 0) continue;
         char key[48];
         snprintf(key, sizeof key, "%s_perf", RG_TASK_NAMES[t]);
-        dict_set(out, key, log->task_perf[t] / log->task_n[t]);
+        dict_set(out, key, log->task_n[t] > 0 ? log->task_perf[t] / log->task_n[t] : 0);
         snprintf(key, sizeof key, "%s_share", RG_TASK_NAMES[t]);
         dict_set(out, key, log->task_n[t]);
     }
