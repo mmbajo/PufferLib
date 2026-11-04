@@ -47,7 +47,7 @@ world_create 0 $NBOTS || { world_stop_all; exit 5; }
 world_start 0 || { world_stop_all; exit 5; }
 
 $RG/client/scripted_bot --host 127.0.0.1 --port 7000 --accounts $WORLD_ROOT/w0/accounts \
-    --db $RATHENA/db --bots $NBOTS --minutes $MINUTES --log-every 60 --die-after $DIE_AFTER --verbose ${BOT_FLAGS:-} &
+    --db $RATHENA/db --bots $NBOTS --minutes $MINUTES --log-every ${LOG_EVERY:-60} --die-after $DIE_AFTER --verbose ${BOT_FLAGS:-} &
 bot=$!
 wait $bot
 status=$?

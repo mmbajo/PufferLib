@@ -23,15 +23,35 @@ one GPU job on one node
   - With the patch switched off (the default), the same build serves a normal real-time world.
 - **Episodes.** A GM-level script in the training worlds (`server/npc/rl_train.txt`, `@rlreset`)
   resets a character at the start of each episode. Real-time servers have no such script.
-- **The env** (`ragnarok.h`).
-  - It turns actions into requests: walk, attack, pick up, potion, sit.
+- **The env** (`ragnarok.h`) trains one goal-conditioned model on several tasks at once.
+  - Each episode, a bot draws a task (`taskN_weight`), and `@rlreset <task>` sets up its character:
+    job, levels, stats, skills, gear and map.
+  - The observation starts with a goal vector (task, difficulty, job) and then describes:
+    - the bot itself: HP, SP, levels, exp, weight, casting, skills;
+    - the 15×15 walkable cells around it;
+    - the 8 nearest monsters, by their properties (level, HP, element, aggressive, boss) rather
+      than their ids;
+    - the 4 nearest items.
+    - It reserves room for party members and dialogue, so later tasks don't change its size.
+  - Actions:
+    - a verb: wait, move, attack, pick up, potion, sit, or skill;
+    - a direction;
+    - a monster or item slot;
+    - one of 24 first-class skills.
+    - Masks rule out what can't be used right now.
   - Attacks and pick-ups carry on over the next steps: rAthena never walks a player into range, so
     the env does it.
-  - Observation: the bot's own state, the walkable cells around it, the nearest monsters and the
-    nearest items on the ground.
-  - Reward: exp gained divided by the exp the level needs.
-  - `perf`: exp per step relative to a hand-written bot (1.0 = as good as that bot).
+  - Reward: exp gained divided by the exp the level needs, normalized by the task's scripted
+    baseline so that every task pays the same at that level.
+  - `perf`: exp per step relative to the task's scripted bot (1.0 = as good as that bot), logged
+    per task as `<task>_perf`.
 - **One env per world**, since a world steps only when all of its bots are ready.
+
+| Task | Character | Map | Baseline (exp per step) |
+|---|---|---|---|
+| 0 `field` | Novice, level 1, Main Gauche, 30 Red Potions | `prt_fild08`: Porings, Lunatics | 0.0312 |
+| 1 `sword_skills` | Swordman 25/25, Bash 10, Magnum Break 5, Blade, 30 potions | `pay_fild01`: Spores | 0.419 |
+| 2 `survival` | Swordman 18/18, the same skills, 10 potions | `pay_fild02`: Wolves, which help each other | 1.19 (0.18 deaths per episode) |
 
 ## Layout
 
@@ -66,6 +86,26 @@ one GPU job on one node
 | Lockstep, 8 lean worlds of 64 bots, 20 CPUs | 470,000 to 550,000 | |
 | Training: 16 worlds of 64 bots, one H100, 64 CPUs | about 1,000,000 | 500M steps in 9 minutes |
 
-First training runs: the policy reaches 0.88 of the scripted bot's exp per step at 30M steps, then
-drifts back toward random, and its entropy rises while its KL falls to zero. Fixing that drift
-(reward scale, entropy bonus, learning rate) comes before anything else.
+Training, field task alone (lr 0.015, reward_scale 1, death −1; perf at a number of world steps):
+
+| Setup | 30M | 100M | 200M | 300M | final eval |
+|---|---|---|---|---|---|
+| Shared worlds, old masks, ent_coef 0.001 | 0.86 | 0.81 | 0.53 | 0.28 | 0.16 |
+| Fresh worlds per run, monsters kept spread, new masks | 0.88 | 1.00 | 0.92 | 0.92 | 0.91 |
+| Same, ent_coef 0.0001 (two seeds), the defaults now | 1.04–1.08 | 1.02–1.07 | 1.00–1.04 | 1.04–1.05 | 1.06–1.12 |
+
+- **The early runs declined because the learned policy gathered the field's monsters into clumps.**
+  - Over hours of game time the field's monster count stays the same, but most of the map empties
+    (measured with `server/npc/rl_census.txt`); under the scripted bot it does not.
+  - The likely cause: a monster that is hit chases the bot that hit it, and stays where it loses
+    track when that bot is reset elsewhere, so a policy that starts fights and walks off drags
+    monsters around.
+  - A later run on the same worlds started on that empty field and never learned.
+  - Every run now gets fresh worlds, and `server/npc/rl_spread.txt` keeps the task maps evenly
+    stocked (see `slurm/README.md`).
+- **G0 passes:** with ent_coef 0.0001 the field policy beats the scripted bot and holds it
+  through 400M steps, with about 40 kills and 0.01 deaths per episode against the bot's 36 and 0.1.
+- **G1 passes:** one model on all three tasks (900M steps, a third of the episodes each) does as
+  well as each task alone (300M steps each): field 1.18 against 1.09, Swordman skills 0.79 against
+  0.77, survival 0.89 against 0.93 (one training run each). The Swordman tasks are still below
+  their scripted bots.

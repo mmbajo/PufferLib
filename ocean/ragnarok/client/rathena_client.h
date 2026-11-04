@@ -147,6 +147,7 @@ typedef struct RoClient {
     int str, agi, vit, int_, dex, luk, attack_range;
     int64_t base_exp, job_exp, next_base_exp, next_job_exp, base_offset, job_offset;
     int sitting, dead;
+    int job;                   // rAthena job id: 0 Novice, 1 Swordman, 2 Mage, 3 Archer, 4 Acolyte, ...
     RoSkill skills[RO_MAX_SKILLS];
     int nskills;
     double cast_until;         // casting a skill until then (client ms), 0 when not
@@ -403,6 +404,7 @@ RO_API void ro_from_charinfo(RoClient* c, const RO_CHARACTER_INFO* ci) {
     c->skill_points = ci->sppoint;
     c->str = ci->Str; c->agi = ci->Agi; c->vit = ci->Vit; c->int_ = ci->Int; c->dex = ci->Dex; c->luk = ci->Luk;
     c->speed = ci->speed > 0 ? ci->speed : 150;
+    c->job = ci->job;
 }
 
 RO_API int ro_login(RoClient* c, int slot) {
@@ -921,6 +923,11 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
     case 0x11a: {  // ZC_USE_SKILL: a support skill took effect
         const RO_PACKET_ZC_USE_SKILL* p = (const RO_PACKET_ZC_USE_SKILL*)(buf);
         if (p->srcAID == c->aid && c->cast_skill == p->SKID) c->cast_until = 0;
+        break;
+    }
+    case 0x1d7: {  // ZC_SPRITE_CHANGE2: look type 0 is the job (a job change)
+        const RO_PACKET_ZC_SPRITE_CHANGE* p = (const RO_PACKET_ZC_SPRITE_CHANGE*)(buf);
+        if (p->AID == c->aid && p->type == 0) c->job = p->val;
         break;
     }
     case 0x139: {  // ZC_ATTACK_FAILURE_FOR_DISTANCE <target>.L <tx>.W <ty>.W <x>.W <y>.W <range>.W
