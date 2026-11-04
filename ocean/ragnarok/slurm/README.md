@@ -22,7 +22,7 @@ The scripts that lean worlds load are in `../server/npc/`:
 - `field_dense.txt`: extra monsters on the training field;
 - `rl_census.txt`: every 10 game minutes, each task map's monster count and the field's monsters in
   a 4x4 grid, in the map server's log;
-- `rl_spread.txt`: every 5 game minutes, a tenth of each task map's idle monsters move to random
+- `rl_spread.txt`: every 5 game minutes, a fifth of each task map's idle monsters move to random
   cells, so the maps stay evenly stocked (see the lessons below).
 
 The rAthena patches are in `../server/patches/`.
