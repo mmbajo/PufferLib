@@ -10,13 +10,22 @@ account already uses; job output and server logs go to `~/ragnarok/train/logs`.
 | `test-bot.sbatch NBOTS MINUTES DIE_AFTER` | One world with scripted bots; the first bot is a GM and types `@die` once. `MODE=lockstep` (pass `--export=ALL,MODE=lockstep`) uses the lockstep build. |
 | `bench-worlds.sbatch NWORLDS NBOTS MINUTES RESET` | Lean lockstep worlds side by side, for throughput. Give it 2 CPUs per world plus a few (`./submit.sh -c 20 ...` for 8 worlds). |
 | `build-train.sbatch` | Builds `~/ragnarok/rathena-train` (branch `local/lockstep`): the play server's client version plus the lockstep patch and 8192 connections per server. |
-| `env-check.sbatch NBOTS STEPS` | The PufferLib env without the trainer (`ocean/ragnarok/ragnarok_check`): random actions, then the scripted policy through the env's own actions. |
+| `env-check.sbatch NBOTS STEPS [ACTION_REPEAT]` | The PufferLib env without the trainer (`ocean/ragnarok/ragnarok_check`): random actions, then the scripted policy on each task through the env's own actions. |
+| `world-age.sbatch NBOTS ROUNDS [TASK]` | Does a world change as it ages? The scripted policy plays ROUNDS rounds of 10 game minutes on one world, each on fresh accounts, and the field's monster census is printed. |
 | `build-env.sbatch` | Builds the env's trainer (for H100) and `--cpu` binary in the toolchain container on a CPU node, to catch compile errors before a GPU job. |
-| `train.sbatch NWORLDS NBOTS TIMESTEPS` | Training on one GPU: the worlds on the node, the trainer in the toolchain container; checkpoints and logs in `/lustre/users/user02198/ragnarok/runs/<job>`. Runs on `002-partition-default` with a 24 h limit (training always uses the default partition, with limits over an hour); `-t` on `submit.sh` changes the limit. |
+| `train.sbatch NWORLDS NBOTS TIMESTEPS [RUNS_FILE]` | Training on one GPU: the worlds on the node, the trainer in the toolchain container; checkpoints and logs in `/lustre/users/user02198/ragnarok/runs/<job>`. A runs file holds one run per line (extra `./puffer train` arguments); every run gets freshly started worlds. `BUILD_FLAGS=--float` builds with float32 rollout buffers. Runs on `002-partition-default` with a 24 h limit (training always uses the default partition, with limits over an hour); `-t` on `submit.sh` changes the limit. |
 | `build_image.sbatch`, `smoke.sbatch`, `probe.sbatch` | The toolchain image (CUDA 12.2, clang 15) and its checks; see `TOOLCHAIN.md`. |
 
-The scripts that lean worlds load are in `../server/npc/`: `rl_train.txt` (`@rlreset`, the episode
-reset) and `field_dense.txt` (extra monsters). The rAthena patches are in `../server/patches/`.
+The scripts that lean worlds load are in `../server/npc/`:
+
+- `rl_train.txt`: `@rlreset <task>`, the episode reset;
+- `field_dense.txt`: extra monsters on the training field;
+- `rl_census.txt`: every 10 game minutes, each task map's monster count and the field's monsters in
+  a 4x4 grid, in the map server's log;
+- `rl_spread.txt`: every 5 game minutes, a tenth of each task map's idle monsters move to random
+  cells, so the maps stay evenly stocked (see the lessons below).
+
+The rAthena patches are in `../server/patches/`.
 
 ## World settings
 
@@ -49,3 +58,11 @@ reset) and `field_dense.txt` (extra monsters). The rAthena patches are in `../se
 - A world whose bots are all gone steps itself in real time, or logouts would never finish.
 - rAthena keeps a logged-out account "online" for a while; a second run on the same world should
   use other accounts (`RG_ACCOUNT_OFFSET`).
+- A world played by a learning policy changes as it ages, though the scripted bot leaves it as it
+  was (`world-age.sbatch`: 50 rounds over 8 game hours, perf 0.87 to 1.08, 345 to 359 monsters on
+  the field). A monster that is hit chases the bot that hit it and stays where it loses track
+  when that bot is reset elsewhere. A policy that starts fights and walks off gathers the monsters
+  into a few clumps: in job 5005388 the busiest 100x100 square of `prt_fild08` grew from about 50
+  to up to 195 of its 360 monsters in 8 game hours, and most of the map emptied. A later run on
+  the same worlds then started on an empty field and never learned (9 runs of 9). Hence fresh
+  worlds for every run and `rl_spread.txt`.
