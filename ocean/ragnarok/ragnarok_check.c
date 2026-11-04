@@ -1,7 +1,8 @@
 // ragnarok_check: drive one ragnarok env (world 0) without the trainer, to check the env and to
 // measure each task's scripted baseline.
-// Usage: ragnarok_check NUM_AGENTS STEPS POLICY TASK
-//   POLICY: random or scripted. TASK: a task number, or "mix" for all tasks equally.
+// Usage: ragnarok_check NUM_AGENTS STEPS POLICY TASK [ACTION_REPEAT]
+//   POLICY: random or scripted. TASK: a task number, or "mix" for all tasks equally. STEPS counts
+//   world steps (100 ms each); the policy decides every ACTION_REPEAT of them (default 1).
 // Needs a lockstep world (see slurm/env-check.sbatch) and RO_WORLD_ROOT, RO_DB_DIR.
 //
 // The scripted policy uses only the env's actions: drink a potion below 40% HP; for Swordman
@@ -69,10 +70,14 @@ int main(int argc, char** argv) {
     int n = argc > 1 ? atoi(argv[1]) : 64, steps = argc > 2 ? atoi(argv[2]) : 600;
     int use_script = argc > 3 && !strcmp(argv[3], "scripted");
     const char* task = argc > 4 ? argv[4] : "0";
+    int repeat = argc > 5 ? atoi(argv[5]) : 1;
+    if (repeat < 1) repeat = 1;
+    steps = steps / repeat * repeat;
     Dict kw = {0};
     dict_set(&kw, "num_agents", n);
     dict_set(&kw, "lockstep", 1);
     dict_set(&kw, "episode_steps", 1200);
+    dict_set(&kw, "action_repeat", repeat);
     dict_set(&kw, "reward_scale", 1.0);
     dict_set(&kw, "reward_job", 0.5);
     dict_set(&kw, "reward_death", -1.0);
@@ -106,7 +111,7 @@ int main(int argc, char** argv) {
     int heading[1024] = {0};
     long masked_violations = 0;
     t = ro_ms();
-    for (int s = 0; s < steps; s++) {
+    for (int s = 0; s < steps / repeat; s++) {
         for (int i = 0; i < n; i++) {
             float* a = act + i * NUM_ATNS;
             if (use_script) scripted(obs + (size_t)i * OBS_SIZE, a, &heading[i]);
@@ -119,8 +124,9 @@ int main(int argc, char** argv) {
         for (int i = 0; i < n; i++) ret += rew[i];
     }
     double wall = (ro_ms() - t) / 1000;
-    printf("%s, task %s: %d steps x %d bots in %.2f s wall (%.0f bot steps/s), mean reward per bot-step %.5f\n",
-           use_script ? "scripted" : "random", task, steps, n, wall, steps * (double)n / wall, ret / steps / n);
+    printf("%s, task %s, action repeat %d: %d world steps x %d bots in %.2f s wall (%.0f bot steps/s), mean reward"
+           " per bot-step %.5f\n", use_script ? "scripted" : "random", task, repeat, steps, n, wall,
+           steps * (double)n / wall, ret / steps / n);
     Log* l = &env.log;
     if (l->n > 0) {
         printf("episodes %.0f: perf %.3f, return %.3f, length %.0f, base lv %.2f, job lv %.2f, kills %.1f, deaths %.2f,"

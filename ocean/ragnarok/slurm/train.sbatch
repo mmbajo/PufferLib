@@ -5,7 +5,8 @@
 #
 # Submit with slurm/submit.sh [-t TIME] train.sbatch [NWORLDS] [NBOTS] [TIMESTEPS] [RUNS_FILE].
 # RUNS_FILE (optional) lists one run per line as extra ./puffer train arguments; the runs go one
-# after another, each into runs/<job>/<n>. Training always runs on 002-partition-default with a
+# after another, each into runs/<job>/<n>. BUILD_FLAGS (optional, e.g. --float for float32 rollout
+# buffers instead of bfloat16) go to build.sh. Training always runs on 002-partition-default with a
 # limit over an hour (your rule, 2026-11-05).
 #SBATCH --job-name=ro-train
 #SBATCH --partition=002-partition-default
@@ -78,7 +79,7 @@ srun --container-image=$IMG \
     --container-mounts=/home/user02198/ragnarok:/home/user02198/ragnarok,/lustre/users/user02198/ragnarok:/lustre/users/user02198/ragnarok,$WORLD_ROOT:$WORLD_ROOT \
     --container-workdir=$PUF bash -s <<RUN
 export CCACHE_DIR=/tmp/ccache-$job
-./build.sh ragnarok > $RUN/build.log 2>&1 || { tail -20 $RUN/build.log; exit 1; }
+./build.sh ragnarok ${BUILD_FLAGS:-} > $RUN/build.log 2>&1 || { tail -20 $RUN/build.log; exit 1; }
 n=0
 while IFS= read -r args; do
     n=\$((n + 1))

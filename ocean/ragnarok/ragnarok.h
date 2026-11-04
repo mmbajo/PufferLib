@@ -7,9 +7,11 @@
 // bots. Each puf_init claims the next block of num_agents accounts (w<i>/next_block), since rAthena
 // keeps a just-logged-out account "online" for up to 30 s and a sweep starts a new process per trial.
 //
-// Steps. A step is 100 ms of game time. With lockstep = 1 (training worlds) it is one step of the
-// world: the env turns every action into requests, sends READY for every bot, and waits for the
-// server's DONE. With lockstep = 0 (a real-time server) it waits 100 ms of wall time.
+// Steps. A world step is 100 ms of game time. With lockstep = 1 (training worlds) the env turns
+// every action into requests, sends READY for every bot, and waits for the server's DONE; with
+// lockstep = 0 (a real-time server) it waits 100 ms of wall time. One env step (one decision) spans
+// action_repeat world steps: the verb is sent once, attacks and pick-ups go on, rewards add up.
+// Episode lengths, perf and the time-in-episode input count world steps.
 //
 // Tasks. Every episode, each bot draws a task by the taskN_weight settings, and the training world's
 // `@rlreset <task>` (server/npc/rl_train.txt) sets its character up for it. The observation starts
@@ -151,7 +153,7 @@ struct Env {
     unsigned int rng;
     RgBot* bots;
     RoClient** clients;  // &bots[i].c, for the client's lockstep helpers
-    int lockstep, episode_steps;
+    int lockstep, episode_steps, action_repeat;
     float reward_scale, reward_job, reward_death;
     float task_weight[RG_NTASKS];
     unsigned int seed;
@@ -479,7 +481,7 @@ static void rg_observe(Env* env, int i) {
         verbs[RG_WAIT] = verbs[RG_MOVE] = verbs[RG_SIT] = 1;
         verbs[RG_ATTACK] = b->slot_mob[0] != 0;
         verbs[RG_PICKUP] = b->slot_item[0] != 0;
-        verbs[RG_POTION] = potion != NULL;
+        verbs[RG_POTION] = potion != NULL && c->hp < 0.7 * c->maxhp;  // rg_act drinks only then
         verbs[RG_SKILL] = any_skill;
     }
 }
@@ -558,6 +560,8 @@ void puf_init(Env* env, Dict* kwargs) {
     env->num_agents = dict_get(kwargs, "num_agents");
     env->lockstep = dict_get(kwargs, "lockstep");
     env->episode_steps = dict_get(kwargs, "episode_steps");
+    env->action_repeat = dict_get(kwargs, "action_repeat");
+    if (env->action_repeat < 1) env->action_repeat = 1;
     env->reward_scale = dict_get(kwargs, "reward_scale");
     env->reward_job = dict_get(kwargs, "reward_job");
     env->reward_death = dict_get(kwargs, "reward_death");
@@ -659,60 +663,75 @@ void puf_reset(Env* env) {
 
 void puf_step(Env* env) {
     for (int i = 0; i < env->num_agents; i++) {
-        RgBot* b = &env->bots[i];
-        rg_act(b, env->agents[i].actions);
-        rg_continue(b);
-        if (!b->reset_wait && b->c.status_points > 0 && b->c.state == RO_IN_GAME)
-            ro_spend_status(&b->c, RG_STAT_WEIGHTS[b->c.job >= 0 && b->c.job <= 6 ? b->c.job : 0]);
+        env->agents[i].rewards[0] = 0;
+        env->agents[i].terminals[0] = 0;
     }
-    rg_world_step(env);
-    for (int i = 0; i < env->num_agents; i++) {
-        RgBot* b = &env->bots[i];
-        RoClient* c = &b->c;
-        float r = 0;
-        int done = 0;
-        if (b->reset_wait) {
-            // The reset is landing: no reward, and the episode starts counting once it has.
-            if (--b->reset_wait == 0) rg_begin_episode(b);
-        } else {
-            int64_t base = ro_total_base_exp(c), job = ro_total_job_exp(c);
-            if (c->next_base_exp > 0) r += (float)(base - b->base_seen) / c->next_base_exp;
-            if (c->next_job_exp > 0) r += env->reward_job * (float)(job - b->job_seen) / c->next_job_exp;
-            // Exp is scaled per task so every task pays the same at its baseline; a death costs the
-            // same everywhere.
-            r *= RG_TASK_REWARD[RG_TASK_FIELD] / RG_TASK_REWARD[b->task];
-            int died = c->deaths > b->deaths_seen;
-            if (died) r += env->reward_death;
-            r *= env->reward_scale;
-            b->base_seen = base;
-            b->job_seen = job;
-            b->deaths_seen = c->deaths;
-            b->ret += r;
-            b->steps++;
-            int x, y, seen = 0, players = 0;
-            ro_self_pos(c, &x, &y);
-            for (int u = 0; u < c->nunits; u++) {
-                seen += c->units[u].type == RO_OBJ_MOB;
-                players += c->units[u].type == RO_OBJ_PC && c->units[u].id != c->aid;
-            }
-            b->mobs_seen += seen;
-            b->players_seen += players;
-            int step = rg_dist(b->last_x, b->last_y, x, y);
-            if (step <= 3) b->moved += step;  // more is a warp
-            b->last_x = x;
-            b->last_y = y;
-            if (c->cells) {
-                int ex = x < c->cells->xs - 1 - x ? x : c->cells->xs - 1 - x;
-                int ey = y < c->cells->ys - 1 - y ? y : c->cells->ys - 1 - y;
-                b->edge += 2.0f * (ex < ey ? ex : ey) / (c->cells->xs < c->cells->ys ? c->cells->xs : c->cells->ys);
-            }
-            done = died || (env->episode_steps > 0 && b->steps >= env->episode_steps);
+    for (int rep = 0; rep < env->action_repeat; rep++) {
+        for (int i = 0; i < env->num_agents; i++) {
+            RgBot* b = &env->bots[i];
+            if (env->agents[i].terminals[0]) continue;
+            if (rep == 0) rg_act(b, env->agents[i].actions);
+            rg_continue(b);
+            if (!b->reset_wait && b->c.status_points > 0 && b->c.state == RO_IN_GAME)
+                ro_spend_status(&b->c, RG_STAT_WEIGHTS[b->c.job >= 0 && b->c.job <= 6 ? b->c.job : 0]);
         }
-        env->agents[i].rewards[0] = r;
-        env->agents[i].terminals[0] = done;
-        if (done) rg_end_episode(env, b);
-        rg_observe(env, i);
+        rg_world_step(env);
+        for (int i = 0; i < env->num_agents; i++) {
+            RgBot* b = &env->bots[i];
+            RoClient* c = &b->c;
+            if (env->agents[i].terminals[0]) {
+                // The episode ended earlier in this decision: the reset lands, and the next episode
+                // starts with the next decision.
+                if (b->reset_wait > 1) b->reset_wait--;
+                continue;
+            }
+            float r = 0;
+            int done = 0;
+            if (b->reset_wait) {
+                // The reset is landing: no reward, and the episode starts counting once it has.
+                if (--b->reset_wait == 0) rg_begin_episode(b);
+            } else {
+                int64_t base = ro_total_base_exp(c), job = ro_total_job_exp(c);
+                if (c->next_base_exp > 0) r += (float)(base - b->base_seen) / c->next_base_exp;
+                if (c->next_job_exp > 0) r += env->reward_job * (float)(job - b->job_seen) / c->next_job_exp;
+                // Exp is scaled per task so every task pays the same at its baseline; a death costs the
+                // same everywhere.
+                r *= RG_TASK_REWARD[RG_TASK_FIELD] / RG_TASK_REWARD[b->task];
+                int died = c->deaths > b->deaths_seen;
+                if (died) r += env->reward_death;
+                r *= env->reward_scale;
+                b->base_seen = base;
+                b->job_seen = job;
+                b->deaths_seen = c->deaths;
+                b->ret += r;
+                b->steps++;
+                int x, y, seen = 0, players = 0;
+                ro_self_pos(c, &x, &y);
+                for (int u = 0; u < c->nunits; u++) {
+                    seen += c->units[u].type == RO_OBJ_MOB;
+                    players += c->units[u].type == RO_OBJ_PC && c->units[u].id != c->aid;
+                }
+                b->mobs_seen += seen;
+                b->players_seen += players;
+                int step = rg_dist(b->last_x, b->last_y, x, y);
+                if (step <= 3) b->moved += step;  // more is a warp
+                b->last_x = x;
+                b->last_y = y;
+                if (c->cells) {
+                    int ex = x < c->cells->xs - 1 - x ? x : c->cells->xs - 1 - x;
+                    int ey = y < c->cells->ys - 1 - y ? y : c->cells->ys - 1 - y;
+                    b->edge += 2.0f * (ex < ey ? ex : ey) / (c->cells->xs < c->cells->ys ? c->cells->xs : c->cells->ys);
+                }
+                done = died || (env->episode_steps > 0 && b->steps >= env->episode_steps);
+            }
+            env->agents[i].rewards[0] += r;
+            if (done) {
+                env->agents[i].terminals[0] = 1;
+                rg_end_episode(env, b);
+            }
+        }
     }
+    for (int i = 0; i < env->num_agents; i++) rg_observe(env, i);
 }
 
 // RG_HEADLESS: no window, for tools that do not link raylib.
