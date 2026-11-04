@@ -1,0 +1,31 @@
+//===== Training worlds only (local script, not part of rAthena) =====
+// Keeps the task maps evenly stocked. A monster that is hit chases the bot that hit it and stays
+// where it loses track when that bot is reset elsewhere, so over hours of training a policy that
+// starts fights and walks off gathers the monsters into a few clumps and empties the rest of the map
+// (rl_census.txt measured the busiest 100x100 square of prt_fild08 growing from about 50 to up to
+// 195 of its 360 monsters in 8 game hours). Every 5 minutes of game time, a tenth of each map's
+// monsters that are not fighting move to random cells, so each is placed afresh about every 50 min.
+-	script	rl_spread	-1,{
+OnInit:
+	setarray .maps$[0], "prt_fild08", "pay_fild01", "pay_fild02";
+	initnpctimer;
+	end;
+OnTimer300000:
+	.@moved = 0;
+	for (.@m = 0; .@m < getarraysize(.maps$); .@m++) {
+		.@n = getmapunits(BL_MOB, .maps$[.@m], .@gid);
+		for (.@i = 0; .@i < .@n; .@i++) {
+			if (rand(10))
+				continue;
+			getunitdata .@gid[.@i], .@d;
+			if (.@d[UMOB_TARGETID])
+				continue;
+			unitwarp .@gid[.@i], .maps$[.@m], -1, -1;
+			.@moved++;
+		}
+		deletearray .@gid;
+	}
+	debugmes "rl_spread moved " + .@moved;
+	initnpctimer;
+	end;
+}
