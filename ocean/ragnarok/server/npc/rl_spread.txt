@@ -1,10 +1,10 @@
 //===== Training worlds only (local script, not part of rAthena) =====
-// Keeps the task maps evenly stocked. A monster that is hit chases the bot that hit it and stays
-// where it loses track when that bot is reset elsewhere, so over hours of training a policy that
-// starts fights and walks off gathers the monsters into a few clumps and empties the rest of the map
-// (rl_census.txt measured the busiest 100x100 square of prt_fild08 growing from about 50 to up to
-// 195 of its 360 monsters in 8 game hours). Kills spread monsters too, since a monster respawns on
-// a random cell, so a map with few bots on it clumps faster. Every 5 minutes of game time, a fifth
+// Keeps the task maps evenly stocked. Over hours of training a learned policy gathers a map's
+// monsters into a few clumps and empties the rest of it (rl_census.txt measured the busiest 100x100
+// square of prt_fild08 growing from about 50 to up to 195 of its 360 monsters in 8 game hours). The
+// likely cause: a monster that is hit chases the bot that hit it and stays where it loses track when
+// that bot is reset elsewhere. Kills spread monsters too, since a monster respawns on a random
+// cell, so a map with few bots on it probably clumps faster. Every 5 minutes of game time, a fifth
 // of each map's monsters that are not fighting move to random cells, so each is placed afresh about
 // every 25 minutes. freeloop: one pass over three stocked maps (about 660 monsters) is more loop
 // steps than rAthena allows a script by default, which would abort it as an infinite loop.

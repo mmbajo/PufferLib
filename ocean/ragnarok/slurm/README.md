@@ -60,9 +60,10 @@ The rAthena patches are in `../server/patches/`.
   use other accounts (`RG_ACCOUNT_OFFSET`).
 - A world played by a learning policy changes as it ages, though the scripted bot leaves it as it
   was (`world-age.sbatch`: 50 rounds over 8 game hours, perf 0.87 to 1.08, 345 to 359 monsters on
-  the field). A monster that is hit chases the bot that hit it and stays where it loses track
-  when that bot is reset elsewhere. A policy that starts fights and walks off gathers the monsters
-  into a few clumps: in job 5005388 the busiest 100x100 square of `prt_fild08` grew from about 50
-  to up to 195 of its 360 monsters in 8 game hours, and most of the map emptied. A later run on
+  the field). Under a learned policy the monsters gather into a few clumps: in job 5005388 the
+  busiest 100x100 square of `prt_fild08` grew from about 50 to up to 195 of its 360 monsters in 8
+  game hours, and most of the map emptied. The likely cause: a monster that is hit chases the bot
+  that hit it and stays where it loses track when that bot is reset elsewhere, so a policy that
+  starts fights and walks off drags monsters around. A later run on
   the same worlds then started on an empty field and never learned (9 runs of 9). Hence fresh
   worlds for every run and `rl_spread.txt`.

@@ -94,11 +94,12 @@ Training, field task alone (lr 0.015, reward_scale 1, death −1; perf at a numb
 | Fresh worlds per run, monsters kept spread, new masks | 0.88 | 1.00 | 0.92 | 0.92 | 0.91 |
 | Same, ent_coef 0.0001 (two seeds), the defaults now | 1.04–1.08 | 1.02–1.07 | 1.00–1.04 | 1.04–1.05 | 1.06–1.12 |
 
-- **The early runs declined because the bots herded the monsters.**
-  - A monster that is hit chases the bot that hit it, and stays where it loses track when that bot
-    is reset elsewhere.
-  - A policy that starts fights and walks off gathers the field's monsters into a few clumps over
-    hours of game time. The count stays the same, but most of the map empties.
+- **The early runs declined because the learned policy gathered the field's monsters into clumps.**
+  - Over hours of game time the field's monster count stays the same, but most of the map empties
+    (measured with `server/npc/rl_census.txt`); under the scripted bot it does not.
+  - The likely cause: a monster that is hit chases the bot that hit it, and stays where it loses
+    track when that bot is reset elsewhere, so a policy that starts fights and walks off drags
+    monsters around.
   - A later run on the same worlds started on that empty field and never learned.
   - Every run now gets fresh worlds, and `server/npc/rl_spread.txt` keeps the task maps evenly
     stocked (see `slurm/README.md`).
@@ -106,4 +107,5 @@ Training, field task alone (lr 0.015, reward_scale 1, death −1; perf at a numb
   through 400M steps, with about 40 kills and 0.01 deaths per episode against the bot's 36 and 0.1.
 - **G1 passes:** one model on all three tasks (900M steps, a third of the episodes each) does as
   well as each task alone (300M steps each): field 1.18 against 1.09, Swordman skills 0.79 against
-  0.77, survival 0.89 against 0.93. The Swordman tasks are still below their scripted bots.
+  0.77, survival 0.89 against 0.93 (one training run each). The Swordman tasks are still below
+  their scripted bots.
