@@ -115,8 +115,12 @@ struct Log {
     float picked;
     float base_exp;
     float skills;
-    float mobs_seen;  // monsters in sight per step
-    float edge;       // distance to the nearest map edge, as a fraction of half the map
+    float mobs_seen;     // monsters in sight per step
+    float players_seen;  // other players in sight per step
+    float edge;          // distance to the nearest map edge, as a fraction of half the map
+    float moved;         // cells walked per step
+    // Share of the steps a bot could act on which it chose each verb.
+    float act_wait, act_move, act_attack, act_pickup, act_potion, act_sit, act_skill;
     float task_perf[RG_LOG_TASKS];
     float task_n[RG_LOG_TASKS];
     float n;
@@ -134,7 +138,8 @@ typedef struct RgBot {
     // This episode.
     int steps, kills0, potions0, picked0, skills0;
     int64_t base0;
-    float ret, mobs_seen, edge;
+    float ret, mobs_seen, players_seen, edge, moved;
+    int acts, verbs[RG_SKILL + 1], last_x, last_y;
 } RgBot;
 
 struct Env {
@@ -209,6 +214,8 @@ static void rg_act(RgBot* b, const float* a) {
     RoClient* c = &b->c;
     if (c->state != RO_IN_GAME || c->dead || b->reset_wait) return;
     int verb = (int)a[0], dir = (int)a[1], slot = (int)a[2], skill = (int)a[3];
+    b->acts++;
+    if (verb >= 0 && verb <= RG_SKILL) b->verbs[verb]++;
     int x, y;
     ro_self_pos(c, &x, &y);
     switch (verb) {
@@ -482,7 +489,10 @@ static void rg_begin_episode(RgBot* b) {
     RoClient* c = &b->c;
     b->steps = 0;
     b->ret = 0;
-    b->mobs_seen = b->edge = 0;
+    b->mobs_seen = b->players_seen = b->edge = b->moved = 0;
+    b->acts = 0;
+    memset(b->verbs, 0, sizeof b->verbs);
+    ro_self_pos(c, &b->last_x, &b->last_y);
     b->kills0 = c->kills;
     b->potions0 = c->potions;
     b->picked0 = c->picked;
@@ -523,8 +533,18 @@ static void rg_end_episode(Env* env, RgBot* b) {
     env->log.picked += c->picked - b->picked0;
     env->log.skills += c->skills_used - b->skills0;
     env->log.base_exp += (float)(ro_total_base_exp(c) - b->base0);
-    env->log.mobs_seen += b->steps > 0 ? b->mobs_seen / b->steps : 0;
-    env->log.edge += b->steps > 0 ? b->edge / b->steps : 0;
+    if (b->steps > 0) {
+        env->log.mobs_seen += b->mobs_seen / b->steps;
+        env->log.players_seen += b->players_seen / b->steps;
+        env->log.edge += b->edge / b->steps;
+        env->log.moved += b->moved / b->steps;
+    }
+    if (b->acts > 0) {
+        float* share[RG_SKILL + 1] = {&env->log.act_wait, &env->log.act_move, &env->log.act_attack,
+                                      &env->log.act_pickup, &env->log.act_potion, &env->log.act_sit,
+                                      &env->log.act_skill};
+        for (int v = 0; v <= RG_SKILL; v++) *share[v] += (float)b->verbs[v] / b->acts;
+    }
     env->log.deaths += c->dead;
     if (b->task < RG_LOG_TASKS) {
         env->log.task_perf[b->task] += perf;
@@ -669,10 +689,18 @@ void puf_step(Env* env) {
             b->deaths_seen = c->deaths;
             b->ret += r;
             b->steps++;
-            int x, y, seen = 0;
+            int x, y, seen = 0, players = 0;
             ro_self_pos(c, &x, &y);
-            for (int u = 0; u < c->nunits; u++) seen += c->units[u].type == RO_OBJ_MOB;
+            for (int u = 0; u < c->nunits; u++) {
+                seen += c->units[u].type == RO_OBJ_MOB;
+                players += c->units[u].type == RO_OBJ_PC && c->units[u].id != c->aid;
+            }
             b->mobs_seen += seen;
+            b->players_seen += players;
+            int step = rg_dist(b->last_x, b->last_y, x, y);
+            if (step <= 3) b->moved += step;  // more is a warp
+            b->last_x = x;
+            b->last_y = y;
             if (c->cells) {
                 int ex = x < c->cells->xs - 1 - x ? x : c->cells->xs - 1 - x;
                 int ey = y < c->cells->ys - 1 - y ? y : c->cells->ys - 1 - y;
@@ -754,7 +782,16 @@ void puf_log(Log* log, Dict* out) {
     dict_set(out, "base_exp", log->base_exp);
     dict_set(out, "skills", log->skills);
     dict_set(out, "mobs_seen", log->mobs_seen);
+    dict_set(out, "players_seen", log->players_seen);
     dict_set(out, "edge", log->edge);
+    dict_set(out, "moved", log->moved);
+    dict_set(out, "act_wait", log->act_wait);
+    dict_set(out, "act_move", log->act_move);
+    dict_set(out, "act_attack", log->act_attack);
+    dict_set(out, "act_pickup", log->act_pickup);
+    dict_set(out, "act_potion", log->act_potion);
+    dict_set(out, "act_sit", log->act_sit);
+    dict_set(out, "act_skill", log->act_skill);
     // Per task: the trainer divides every field by n, which leaves these ratios as they are.
     for (int t = 0; t < RG_NTASKS && t < RG_LOG_TASKS; t++) {
         if (log->task_n[t] <= 0) continue;

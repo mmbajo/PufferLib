@@ -125,11 +125,14 @@ int main(int argc, char** argv) {
     if (l->n > 0) {
         printf("episodes %.0f: perf %.3f, return %.3f, length %.0f, base lv %.2f, job lv %.2f, kills %.1f, deaths %.2f,"
                " potions %.1f, picked %.1f, skills %.1f, base exp %.1f (%.5f per step), monsters in sight %.2f,"
-               " edge distance %.2f\n",
+               " players in sight %.2f, edge distance %.2f, cells walked per step %.3f\n",
                l->n, l->perf / l->n, l->score / l->n, l->episode_length / l->n, l->base_level / l->n,
                l->job_level / l->n, l->kills / l->n, l->deaths / l->n, l->potions / l->n, l->picked / l->n,
                l->skills / l->n, l->base_exp / l->n, l->episode_length > 0 ? l->base_exp / l->episode_length : 0,
-               l->mobs_seen / l->n, l->edge / l->n);
+               l->mobs_seen / l->n, l->players_seen / l->n, l->edge / l->n, l->moved / l->n);
+        printf("  verbs: wait %.2f move %.2f attack %.2f pickup %.2f potion %.2f sit %.2f skill %.2f\n",
+               l->act_wait / l->n, l->act_move / l->n, l->act_attack / l->n, l->act_pickup / l->n,
+               l->act_potion / l->n, l->act_sit / l->n, l->act_skill / l->n);
         for (int k = 0; k < RG_NTASKS; k++)
             if (l->task_n[k] > 0)
                 printf("  task %d %-13s episodes %.0f, perf %.3f\n", k, RG_TASK_NAMES[k], l->task_n[k],
