@@ -1,0 +1,17 @@
+//===== Training worlds only (local script, not part of rAthena) =====
+// Every 10 minutes of game time, write to the map server's log each task map's monster count, the
+// training field's monsters in a 4x4 grid of 100x100-cell squares (does the field stay evenly
+// stocked?) and the Jellopy lying on it. Under dynamic_mobs a map nobody is on counts 0.
+-	script	rl_census	-1,{
+OnInit:
+	initnpctimer;
+	end;
+OnTimer600000:
+	.@grid$ = "";
+	for (.@gy = 0; .@gy < 4; .@gy++)
+		for (.@gx = 0; .@gx < 4; .@gx++)
+			.@grid$ += " " + getareaunits(BL_MOB, "prt_fild08", .@gx * 100, .@gy * 100, .@gx * 100 + 99, .@gy * 100 + 99);
+	debugmes "rl_census prt_fild08 " + mobcount("prt_fild08", "all") + " grid" + .@grid$ + " pay_fild01 " + mobcount("pay_fild01", "all") + " pay_fild02 " + mobcount("pay_fild02", "all") + " jellopy_on_prt_fild08 " + getareadropitem("prt_fild08", 0, 0, 399, 399, 909);
+	initnpctimer;
+	end;
+}
