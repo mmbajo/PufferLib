@@ -36,8 +36,10 @@ one GPU job on one node
     - the 15×15 walkable cells around it;
     - the 8 nearest monsters, by their properties (level, HP, element, aggressive, boss) rather
       than their ids;
-    - the 4 nearest items.
-    - It reserves room for party members and dialogue, so later tasks don't change its size.
+    - the 4 nearest items;
+    - the effects on the bot: status icons such as Blessing, with the share of their time left, and
+      ailments (stone, frozen, stunned, asleep, poisoned, other), which each monster shows too.
+    - It reserves room for party members, dialogue and more, so later tasks don't change its size.
   - Actions:
     - a verb: wait, move, attack, pick up, potion, sit, or skill;
     - a direction;
@@ -53,20 +55,21 @@ one GPU job on one node
     and its perf is the speed on the way there.
 - **One env per world**, since a world steps only when all of its bots are ready.
 
-Every class task is a first class at levels 25/25 with its skills, weapon and 30 Red Potions. The
-baselines are the scripted bots in `ragnarok_check.c`.
+Every class task is a first class at levels 25/25 with its skills, weapon and 30 Red Potions, on a
+renewal field (client 20221005) whose monsters are near its level. The baselines are the scripted bots
+in `ragnarok_check.c` on renewal (job 5007175).
 
 | Task | Character | Map | Baseline (exp per step) |
 |---|---|---|---|
-| 0 `field` | Novice, level 1, Main Gauche, 30 Red Potions | `prt_fild08`: Porings, Lunatics | 0.0312 |
-| 1 `sword_skills` | Swordman: Bash 10, Magnum Break 5, Blade | `pay_fild01`: Spores | 0.419 |
-| 2 `survival` | Swordman 18/18, the same skills, 10 potions | `pay_fild02`: Wolves, which help each other | 1.19 (0.18 deaths per episode) |
-| 3 `mage_skills` | Mage: Fire, Cold and Lightning Bolt 5, Soul Strike 3, Napalm Beat 3, Fire Ball 1, Frost Diver 1, Rod | `mjolnir_01`: mostly earth monsters (Coco, Caramel, Horn), some wind | 0.648 |
-| 4 `archer_skills` | Archer: Double Strafe 10, Arrow Shower 5, Owl's and Vulture's Eye 5, Bow, 2,000 Arrows | `prt_fild03`: Yoyos, Smokies | 1.344 |
-| 5 `acolyte_skills` | Acolyte: Heal 5, Blessing 5, Increase AGI 5, Club | `pay_fild01`: Spores | 0.269 |
-| 6 `thief_skills` | Thief: Double Attack 10, Envenom 5, Steal 3, Hiding 2, Main Gauche | `prt_fild03` | 1.588 |
-| 7 `merchant_skills` | Merchant: Mammonite 10 with 200,000 zeny, Axe | `mjolnir_01` | 1.053 |
-| 8 `navigation` | The field's Novice, walking to a cell 10–120 cells away; the goal gives the way there | `prt_fild08` | 0.392 cells per step (about 70% arrive within 1,200 steps) |
+| 0 `field` | Novice, level 1, Main Gauche, 30 Red Potions | `prt_fild08`: Porings, Lunatics, Fabres | 2.31 |
+| 1 `sword_skills` | Swordman: Bash 10, Magnum Break 5, Blade | `pay_fild01`: Spores (added), Willows | 2.29 |
+| 2 `survival` | Swordman 18/18, the same skills, 10 potions | `moc_fild02`: Peco Pecos (level 25), which help each other | 2.38 (0.25 deaths per episode) |
+| 3 `mage_skills` | Mage: Fire, Cold and Lightning Bolt 5, Soul Strike 3, Napalm Beat 3, Fire Ball 1, Frost Diver 1, Rod | `mjolnir_01`: mostly Caramels (earth), some wind | 2.25 |
+| 4 `archer_skills` | Archer: Double Strafe 10, Arrow Shower 5, Owl's and Vulture's Eye 5, Bow, 2,000 Arrows | `pay_fild07`: Bigfoot, Caramel, Stainer, Creamy | 3.54 |
+| 5 `acolyte_skills` | Acolyte: Heal 5, Blessing 5, Increase AGI 5, Club | `pay_fild01` | 2.65 |
+| 6 `thief_skills` | Thief: Double Attack 10, Envenom 5, Steal 3, Hiding 2, Main Gauche | `pay_fild07` | 2.94 |
+| 7 `merchant_skills` | Merchant: Mammonite 10 with 200,000 zeny, Axe | `mjolnir_01` | 2.96 |
+| 8 `navigation` | The field's Novice, walking to a cell 10–120 cells away; the goal gives the way there | `prt_fild08` | 0.394 cells per step (about 70% arrive within 1,200 steps) |
 
 ## Layout
 

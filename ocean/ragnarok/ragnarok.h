@@ -61,13 +61,12 @@ static const char* RG_TASK_NAMES[RG_NTASKS] = {"field",       "sword_skills",  "
 // Each task's scripted policy (ragnarok_check, 64 bots): its base exp per step, against which perf
 // is measured, and the exp part of its reward per step (level-normalized exp, reward_scale 1), by
 // which the exp reward is normalized so that every task pays the same there; a death costs the same
-// everywhere. Jobs 5006800 and 5006913 (navigation; 12,000 steps per task) measured all of them; the
-// first three baselines stay at job 5005277's values, so their perf reads as it did in the G0 and
-// G1 runs (the Swordman skills bot measured 0.381 there, 9% below 0.419).
-static const float RG_TASK_BASELINE[RG_NTASKS] = {0.0312f, 0.419f, 1.19f, 0.648f,
-                                                  1.344f,  0.269f, 1.588f, 1.053f, 0.392f};
-static const float RG_TASK_REWARD[RG_NTASKS] = {0.002628f, 0.000154f, 0.001082f, 0.000238f,
-                                                0.000484f, 0.000109f, 0.000562f, 0.000390f, 0.005019f};
+// everywhere. Job 5007175 measured all of them on renewal (client 20221005, 12,000 steps per task),
+// so perf does not compare with the pre-renewal G0 and G1 runs.
+static const float RG_TASK_BASELINE[RG_NTASKS] = {2.314f, 2.293f, 2.379f, 2.246f, 3.541f,
+                                                  2.646f, 2.944f, 2.958f, 0.394f};
+static const float RG_TASK_REWARD[RG_NTASKS] = {0.005121f, 0.000218f, 0.000428f, 0.000230f, 0.000361f,
+                                                0.000251f, 0.000303f, 0.000300f, 0.005184f};
 // Navigation: a target the bot can walk to, RG_NAV_MIN to RG_NAV_MAX cells away (the larger of the
 // two axes), reached within 1 cell. Its perf is cells per step on the way there (0 if it never arrives) over the
 // scripted bot's; its reward is the progress toward the target (adding up to 1 on the way) plus 1
