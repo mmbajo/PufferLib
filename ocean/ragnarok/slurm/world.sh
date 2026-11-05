@@ -180,8 +180,8 @@ EOF
     {
         echo "CREATE DATABASE $dbname;"
         echo "USE $dbname;"
-        echo "SOURCE $RATHENA/sql-files/main.sql;"
-        echo "SOURCE $RATHENA/sql-files/logs.sql;"
+        # Through stdin rather than SOURCE: the MariaDB container sees only home, not every $RATHENA.
+        cat $RATHENA/sql-files/main.sql $RATHENA/sql-files/logs.sql
         echo "UPDATE login SET user_pass = '$inter_pw' WHERE account_id = 1 AND userid = 's1';"
         echo "GRANT ALL ON $dbname.* TO 'ragnarok'@'127.0.0.1';"
         local total=$((nbots * WORLD_ACCOUNT_BLOCKS))
