@@ -10,6 +10,508 @@
 #endif
 
 #define RO_PACKETVER 20130618
+#define RO_RENEWAL 0  // the server's rules: its db/ and npc/ subfolder is pre-re
+#define RO_RULES_DIR "pre-re"
+
+// Packet ids by rAthena's name for this version (DEFINE_PACKET_HEADER).
+#define RO_HEADER_AC_ACCEPT_LOGIN 0x0069
+#define RO_HEADER_AC_ACK_HASH 0x01dc
+#define RO_HEADER_AC_REFUSE_LOGIN 0x083e
+#define RO_HEADER_CA_CONNECT_INFO_CHANGED 0x0200
+#define RO_HEADER_CA_EXE_HASHCHECK 0x0204
+#define RO_HEADER_CA_LOGIN 0x0064
+#define RO_HEADER_CA_LOGIN2 0x01dd
+#define RO_HEADER_CA_LOGIN3 0x01fa
+#define RO_HEADER_CA_LOGIN4 0x027c
+#define RO_HEADER_CA_LOGIN_CHANNEL 0x02b0
+#define RO_HEADER_CA_LOGIN_PCBANG 0x0277
+#define RO_HEADER_CA_REQ_HASH 0x01db
+#define RO_HEADER_CA_SSO_LOGIN_REQ 0x0825
+#define RO_HEADER_CH_AVAILABLE_SECOND_PASSWD 0x08c5
+#define RO_HEADER_CH_CHARLIST_REQ 0x09a1
+#define RO_HEADER_CH_DELETE_CHAR 0x01fb
+#define RO_HEADER_CH_DELETE_CHAR3 0x0829
+#define RO_HEADER_CH_DELETE_CHAR3_CANCEL 0x082b
+#define RO_HEADER_CH_DELETE_CHAR3_RESERVED 0x0827
+#define RO_HEADER_CH_EDIT_SECOND_PASSWD 0x08be
+#define RO_HEADER_CH_MAKE_CHAR 0x0970
+#define RO_HEADER_CH_MAKE_SECOND_PASSWD 0x08ba
+#define RO_HEADER_CH_REQ_CHANGE_CHARACTER_SLOT 0x08d4
+#define RO_HEADER_CH_REQ_CHANGE_CHARNAME 0x08fc
+#define RO_HEADER_CH_REQ_IS_VALID_CHARNAME 0x028d
+#define RO_HEADER_CH_SECOND_PASSWD_ACK 0x08b8
+#define RO_HEADER_CH_SELECT_ACCESSIBLE_MAPNAME 0x0841
+#define RO_HEADER_CH_SELECT_CHAR 0x0066
+#define RO_HEADER_CT_AUTH 0x0acf
+#define RO_HEADER_CZ_ACK_SELECT_DEALTYPE 0x00c5
+#define RO_HEADER_CZ_ACTIVE_QUEST 0x02b6
+#define RO_HEADER_CZ_ADD_EXCHANGE_ITEM 0x00e8
+#define RO_HEADER_CZ_ADVANCED_STATUS_CHANGE 0x0b24
+#define RO_HEADER_CZ_ALCHEMIST_RANK 0x0218
+#define RO_HEADER_CZ_ALLY_CHAT 0x0bdd
+#define RO_HEADER_CZ_AUCTION_ADD 0x024d
+#define RO_HEADER_CZ_AUCTION_BUY 0x024f
+#define RO_HEADER_CZ_AUCTION_ITEM_SEARCH 0x0251
+#define RO_HEADER_CZ_BLACKSMITH_RANK 0x0217
+#define RO_HEADER_CZ_BROADCAST 0x0099
+#define RO_HEADER_CZ_CHANGE_CHATROOM 0x00de
+#define RO_HEADER_CZ_CLIENT_VERSION 0x044a
+#define RO_HEADER_CZ_CLOSE_DIALOG 0x0146
+#define RO_HEADER_CZ_CONTACTNPC 0x0090
+#define RO_HEADER_CZ_CREATE_CHATROOM 0x00d5
+#define RO_HEADER_CZ_GM_CHECKER 0x0c0b
+#define RO_HEADER_CZ_INPUT_EDITDLG 0x0143
+#define RO_HEADER_CZ_INPUT_EDITDLGSTR 0x01d5
+#define RO_HEADER_CZ_INVENTORY_TAB 0x0907
+#define RO_HEADER_CZ_JOIN_BABY 0x01f7
+#define RO_HEADER_CZ_JOIN_GROUP 0x00ff
+#define RO_HEADER_CZ_JOIN_GUILD 0x016b
+#define RO_HEADER_CZ_KILLER_RANK 0x0237
+#define RO_HEADER_CZ_LESSEFFECT 0x021d
+#define RO_HEADER_CZ_LOCALBROADCAST 0x019c
+#define RO_HEADER_CZ_MAKE_GROUP 0x00f9
+#define RO_HEADER_CZ_MAKE_GROUP2 0x01e8
+#define RO_HEADER_CZ_MOVETO_MAP 0x0140
+#define RO_HEADER_CZ_MOVE_ITEM_FROM_BODY_TO_CART 0x0126
+#define RO_HEADER_CZ_MOVE_ITEM_FROM_CART_TO_BODY 0x0127
+#define RO_HEADER_CZ_MOVE_ITEM_FROM_CART_TO_STORE 0x0129
+#define RO_HEADER_CZ_MOVE_ITEM_FROM_STORE_TO_CART 0x0128
+#define RO_HEADER_CZ_MOVE_ITEM_TO_PERSONAL 0x0c22
+#define RO_HEADER_CZ_PARTY_CONFIG 0x02c8
+#define RO_HEADER_CZ_PARTY_JOIN_REQ 0x02c4
+#define RO_HEADER_CZ_PARTY_JOIN_REQ_ACK 0x02c7
+#define RO_HEADER_CZ_PARTY_REQ_ACK_MASTER_TO_JOIN 0x0af8
+#define RO_HEADER_CZ_PARTY_REQ_MASTER_TO_JOIN 0x0ae6
+#define RO_HEADER_CZ_PC_PURCHASE_ITEMLIST_FROMMC 0x0134
+#define RO_HEADER_CZ_PC_PURCHASE_ITEMLIST_FROMMC2 0x0801
+#define RO_HEADER_CZ_PC_SELL_ITEMLIST 0x00c9
+#define RO_HEADER_CZ_QUEST_STATUS_REQ 0x0bf3
+#define RO_HEADER_CZ_REQMAKINGITEM 0x018e
+#define RO_HEADER_CZ_REQUEST_MOVENPC 0x0232
+#define RO_HEADER_CZ_REQ_ADD_NEW_EMBLEM 0x0b46
+#define RO_HEADER_CZ_REQ_APPLY_BARGAIN_SALE_ITEM 0x09ae
+#define RO_HEADER_CZ_REQ_APPLY_BARGAIN_SALE_ITEM2 0x0a3d
+#define RO_HEADER_CZ_REQ_BANKING_CHECK 0x09ab
+#define RO_HEADER_CZ_REQ_BANKING_DEPOSIT 0x09a7
+#define RO_HEADER_CZ_REQ_BANKING_WITHDRAW 0x09a9
+#define RO_HEADER_CZ_REQ_BAN_GUILD 0x015b
+#define RO_HEADER_CZ_REQ_CASH_BARGAIN_SALE_ITEM_INFO 0x09ac
+#define RO_HEADER_CZ_REQ_CHANGE_MEMBERPOS 0x0155
+#define RO_HEADER_CZ_REQ_CLOSE_BANKING 0x09b8
+#define RO_HEADER_CZ_REQ_DISORGANIZE_GUILD 0x015d
+#define RO_HEADER_CZ_REQ_EMOTION 0x00bf
+#define RO_HEADER_CZ_REQ_EMOTION_EXPANSION 0x0be9
+#define RO_HEADER_CZ_REQ_ENTER_ROOM 0x00d9
+#define RO_HEADER_CZ_REQ_EXPEL_GROUP_MEMBER 0x0103
+#define RO_HEADER_CZ_REQ_GUILD_EMBLEM_IMG1 0x0151
+#define RO_HEADER_CZ_REQ_ITEMCOMPOSITION 0x017c
+#define RO_HEADER_CZ_REQ_ITEMCOMPOSITION_LIST 0x017a
+#define RO_HEADER_CZ_REQ_ITEMIDENTIFY 0x0178
+#define RO_HEADER_CZ_REQ_ITEMREPAIR 0x01fd
+#define RO_HEADER_CZ_REQ_ITEMREPAIR1 0x01fd
+#define RO_HEADER_CZ_REQ_JOIN_GROUP 0x00fc
+#define RO_HEADER_CZ_REQ_JOIN_GUILD 0x0168
+#define RO_HEADER_CZ_REQ_JOIN_GUILD2 0x0916
+#define RO_HEADER_CZ_REQ_LEAVE_GROUP 0x0100
+#define RO_HEADER_CZ_REQ_LEAVE_GUILD 0x0159
+#define RO_HEADER_CZ_REQ_MAKINGARROW 0x01ae
+#define RO_HEADER_CZ_REQ_MAKINGITEM 0x025b
+#define RO_HEADER_CZ_REQ_MERGE_ITEM 0x096e
+#define RO_HEADER_CZ_REQ_OPEN_BANKING 0x09b6
+#define RO_HEADER_CZ_REQ_RANKING 0x097c
+#define RO_HEADER_CZ_REQ_REMAINTIME 0x01c0
+#define RO_HEADER_CZ_REQ_REMOVE_BARGAIN_SALE_ITEM 0x09b0
+#define RO_HEADER_CZ_REQ_REPORT_USER 0x0be2
+#define RO_HEADER_CZ_REQ_SE_CASH_TAB_CODE 0x0846
+#define RO_HEADER_CZ_REQ_STYLE_CHANGE 0x0a46
+#define RO_HEADER_CZ_REQ_STYLE_CHANGE2 0x0afc
+#define RO_HEADER_CZ_REQ_STYLE_CLOSE 0x0a48
+#define RO_HEADER_CZ_REQ_WEAR_EQUIP 0x0998
+#define RO_HEADER_CZ_RESET 0x0197
+#define RO_HEADER_CZ_RESET_SKILL 0x0bb1
+#define RO_HEADER_CZ_RODEX_RETURN 0x0b98
+#define RO_HEADER_CZ_SELECTAUTOSPELL 0x01ce
+#define RO_HEADER_CZ_SELECT_WARPPOINT 0x011b
+#define RO_HEADER_CZ_SETTING_WHISPER_STATE 0x00d0
+#define RO_HEADER_CZ_SE_CASHSHOP_OPEN1 0x0844
+#define RO_HEADER_CZ_SE_PC_BUY_CASHITEM_LIST 0x0848
+#define RO_HEADER_CZ_SHORTCUT_KEY_CHANGE1 0x02ba
+#define RO_HEADER_CZ_SKILL_SELECT_RESPONSE 0x0443
+#define RO_HEADER_CZ_SSILIST_ITEM_CLICK 0x083c
+#define RO_HEADER_CZ_TAEKWON_RANK 0x0225
+#define RO_HEADER_HC_ACCEPT_DELETECHAR 0x006f
+#define RO_HEADER_HC_ACCEPT_ENTER 0x006b
+#define RO_HEADER_HC_ACCEPT_ENTER2 0x082d
+#define RO_HEADER_HC_ACCEPT_MAKECHAR 0x006d
+#define RO_HEADER_HC_ACK_CHANGE_CHARACTER_SLOT 0x08d5
+#define RO_HEADER_HC_ACK_CHANGE_CHARNAME 0x08fd
+#define RO_HEADER_HC_ACK_CHARINFO_PER_PAGE 0x099d
+#define RO_HEADER_HC_ACK_IS_VALID_CHARNAME 0x028e
+#define RO_HEADER_HC_BLOCK_CHARACTER 0x020d
+#define RO_HEADER_HC_CHARLIST_NOTIFY 0x09a0
+#define RO_HEADER_HC_DELETE_CHAR3 0x082a
+#define RO_HEADER_HC_DELETE_CHAR3_CANCEL 0x082c
+#define RO_HEADER_HC_DELETE_CHAR3_RESERVED 0x0828
+#define RO_HEADER_HC_NOTIFY_ACCESSIBLE_MAPNAME 0x0840
+#define RO_HEADER_HC_NOTIFY_ZONESVR 0x0071
+#define RO_HEADER_HC_REFUSE_DELETECHAR 0x0070
+#define RO_HEADER_HC_REFUSE_ENTER 0x006c
+#define RO_HEADER_HC_REFUSE_MAKECHAR 0x006e
+#define RO_HEADER_HC_SECOND_PASSWD_LOGIN 0x08b9
+#define RO_HEADER_PING 0x0187
+#define RO_HEADER_SC_NOTIFY_BAN 0x0081
+#define RO_HEADER_TC_RESULT 0x0ae3
+#define RO_HEADER_ZC_ACCEPT_ENTER 0x02eb
+#define RO_HEADER_ZC_ACK_ADDITEM_TO_CART 0x012c
+#define RO_HEADER_ZC_ACK_ADD_EXCHANGE_ITEM 0x00ea
+#define RO_HEADER_ZC_ACK_BANKING_DEPOSIT 0x09a8
+#define RO_HEADER_ZC_ACK_BANKING_WITHDRAW 0x09aa
+#define RO_HEADER_ZC_ACK_CASH_BARGAIN_SALE_ITEM_INFO 0x09ad
+#define RO_HEADER_ZC_ACK_CHANGE_GUILD_POSITIONINFO 0x0174
+#define RO_HEADER_ZC_ACK_CLAN_LEAVE 0x0989
+#define RO_HEADER_ZC_ACK_CLOSE_BANKING 0x09b9
+#define RO_HEADER_ZC_ACK_COUNT_BARGAIN_SALE_ITEM 0x09c4
+#define RO_HEADER_ZC_ACK_CREATE_CHATROOM 0x00d6
+#define RO_HEADER_ZC_ACK_DISORGANIZE_GUILD_RESULT 0x015e
+#define RO_HEADER_ZC_ACK_EXCHANGE_ITEM 0x01f5
+#define RO_HEADER_ZC_ACK_GUILDSTORAGE_LOG 0x09da
+#define RO_HEADER_ZC_ACK_GUILD_MENUINTERFACE 0x014e
+#define RO_HEADER_ZC_ACK_ITEMCOMPOSITION 0x017d
+#define RO_HEADER_ZC_ACK_ITEMIDENTIFY 0x0179
+#define RO_HEADER_ZC_ACK_ITEMLIST_BUYING_STORE 0x0818
+#define RO_HEADER_ZC_ACK_ITEMREFINING 0x0188
+#define RO_HEADER_ZC_ACK_ITEMREPAIR 0x01fe
+#define RO_HEADER_ZC_ACK_MAKE_GROUP 0x00fa
+#define RO_HEADER_ZC_ACK_MERGE_ITEM 0x096f
+#define RO_HEADER_ZC_ACK_OPENSTORE2 0x0a28
+#define RO_HEADER_ZC_ACK_OPEN_BANKING 0x09b7
+#define RO_HEADER_ZC_ACK_RANKING 0x097d
+#define RO_HEADER_ZC_ACK_RANKING2 0x0af6
+#define RO_HEADER_ZC_ACK_REMEMBER_WARPPOINT 0x011e
+#define RO_HEADER_ZC_ACK_REQMAKINGITEM 0x018f
+#define RO_HEADER_ZC_ACK_REQNAMEALL 0x0195
+#define RO_HEADER_ZC_ACK_REQNAMEALL_NPC 0x0095
+#define RO_HEADER_ZC_ACK_REQNAME_BYGID 0x0194
+#define RO_HEADER_ZC_ACK_REQ_ALLY_GUILD 0x0173
+#define RO_HEADER_ZC_ACK_REQ_CHANGE_MEMBERS 0x0156
+#define RO_HEADER_ZC_ACK_REQ_HOSTILE_GUILD 0x0181
+#define RO_HEADER_ZC_ACK_REQ_JOIN_GUILD 0x0169
+#define RO_HEADER_ZC_ACK_SCHEDULER_CASHITEM 0x08ca
+#define RO_HEADER_ZC_ACK_SE_CASH_ITEM_LIST2 0x08c0
+#define RO_HEADER_ZC_ACK_TOUSESKILL 0x0110
+#define RO_HEADER_ZC_ACK_WEAPONREFINE 0x0223
+#define RO_HEADER_ZC_ACK_WHISPER 0x0098
+#define RO_HEADER_ZC_ACTION_FAILURE 0x013b
+#define RO_HEADER_ZC_ADD_EXCHANGE_ITEM 0x080f
+#define RO_HEADER_ZC_ADD_ITEM_TO_CART 0x01c5
+#define RO_HEADER_ZC_ADD_ITEM_TO_STORE 0x01c4
+#define RO_HEADER_ZC_ADD_SKILL 0x0111
+#define RO_HEADER_ZC_ALCHEMIST_POINT 0x021c
+#define RO_HEADER_ZC_ALCHEMIST_RANK 0x021a
+#define RO_HEADER_ZC_ATTACK_FAILURE_FOR_DISTANCE 0x0139
+#define RO_HEADER_ZC_ATTACK_RANGE 0x013a
+#define RO_HEADER_ZC_AUTORUN_SKILL 0x0147
+#define RO_HEADER_ZC_AUTOSPELLLIST 0x01cd
+#define RO_HEADER_ZC_BANKING_CHECK 0x09a6
+#define RO_HEADER_ZC_BAN_LIST 0x0163
+#define RO_HEADER_ZC_BATTLEFIELD_NOTIFY_HP 0x02e0
+#define RO_HEADER_ZC_BLACKSMITH_POINT 0x021b
+#define RO_HEADER_ZC_BLACKSMITH_RANK 0x0219
+#define RO_HEADER_ZC_BLADESTOP 0x01d1
+#define RO_HEADER_ZC_BOSS_INFO 0x0293
+#define RO_HEADER_ZC_BROADCAST 0x009a
+#define RO_HEADER_ZC_BROADCAST2 0x01c3
+#define RO_HEADER_ZC_BROADCASTING_SPECIAL_ITEM_OBTAIN_item 0x07fd
+#define RO_HEADER_ZC_BUYING_STORE_ENTRY 0x0814
+#define RO_HEADER_ZC_CANCEL_EXCHANGE_ITEM 0x00ee
+#define RO_HEADER_ZC_CARTOFF 0x012b
+#define RO_HEADER_ZC_CASH_ITEM_DELETE 0x0299
+#define RO_HEADER_ZC_CASH_TIME_COUNTER 0x0298
+#define RO_HEADER_ZC_CHANGESTATE_MER 0x0230
+#define RO_HEADER_ZC_CHANGESTATE_PET 0x01a4
+#define RO_HEADER_ZC_CHANGE_CHATROOM 0x00df
+#define RO_HEADER_ZC_CHANGE_DIRECTION 0x009c
+#define RO_HEADER_ZC_CHANGE_GUILD 0x01b4
+#define RO_HEADER_ZC_CLEAR_DIALOG 0x08d6
+#define RO_HEADER_ZC_CLOSE_DIALOG 0x00b6
+#define RO_HEADER_ZC_CLOSE_STORE 0x00f8
+#define RO_HEADER_ZC_COMBODELAY 0x01d2
+#define RO_HEADER_ZC_COMPASS 0x0144
+#define RO_HEADER_ZC_CONCLUDE_EXCHANGE_ITEM 0x00ec
+#define RO_HEADER_ZC_CONFIG_NOTIFY 0x02da
+#define RO_HEADER_ZC_CONGRATULATION 0x01ea
+#define RO_HEADER_ZC_COUPLENAME 0x01e6
+#define RO_HEADER_ZC_COUPLESTATUS 0x0141
+#define RO_HEADER_ZC_DELETEITEM_FROM_MCSTORE 0x0137
+#define RO_HEADER_ZC_DELETE_ITEM_FROM_BODY 0x07fa
+#define RO_HEADER_ZC_DELETE_ITEM_FROM_CART 0x0125
+#define RO_HEADER_ZC_DELETE_ITEM_FROM_STORE 0x00f6
+#define RO_HEADER_ZC_DELETE_MEMBER_FROM_GROUP 0x0105
+#define RO_HEADER_ZC_DELETE_RELATED_GUILD 0x0184
+#define RO_HEADER_ZC_DESTROY_ROOM 0x00d8
+#define RO_HEADER_ZC_DISAPPEAR_BUYING_STORE_ENTRY 0x0816
+#define RO_HEADER_ZC_DISAPPEAR_ENTRY 0x0132
+#define RO_HEADER_ZC_DISPEL 0x01b9
+#define RO_HEADER_ZC_DIVORCE 0x0205
+#define RO_HEADER_ZC_DRESSROOM_OPEN 0x0a02
+#define RO_HEADER_ZC_EFST_SET_ENTER 0x0984
+#define RO_HEADER_ZC_EL_PAR_CHANGE 0x081e
+#define RO_HEADER_ZC_EMOTION 0x00c0
+#define RO_HEADER_ZC_ENTER_ROOM 0x00db
+#define RO_HEADER_ZC_ENTRY_QUEUE_INIT 0x090e
+#define RO_HEADER_ZC_EQUIPITEM_DAMAGED 0x02bb
+#define RO_HEADER_ZC_EQUIPWIN_MICROSCOPE 0x0997
+#define RO_HEADER_ZC_EQUIP_ARROW 0x013c
+#define RO_HEADER_ZC_EXCHANGEITEM_UNDO 0x00f1
+#define RO_HEADER_ZC_EXEC_EXCHANGE_ITEM 0x00f0
+#define RO_HEADER_ZC_FAILED_TRADE_BUYING_STORE_TO_SELLER 0x0824
+#define RO_HEADER_ZC_FEED_MER 0x022f
+#define RO_HEADER_ZC_FEED_PET 0x01a3
+#define RO_HEADER_ZC_FRIENDS_LIST 0x0201
+#define RO_HEADER_ZC_FRIENDS_STATE 0x0206
+#define RO_HEADER_ZC_GM_CHECKER 0x0c0c
+#define RO_HEADER_ZC_GROUP_ISALIVE 0x0ab2
+#define RO_HEADER_ZC_GUILD_CHAT 0x017f
+#define RO_HEADER_ZC_GUILD_EMBLEM_IMG 0x0152
+#define RO_HEADER_ZC_GUILD_INFO 0x01b6
+#define RO_HEADER_ZC_GUILD_NOTICE 0x016f
+#define RO_HEADER_ZC_GUILD_POSITION 0x0afd
+#define RO_HEADER_ZC_GUILD_SKILLINFO 0x0162
+#define RO_HEADER_ZC_HIGHJUMP 0x01ff
+#define RO_HEADER_ZC_HOSKILLINFO_LIST 0x0235
+#define RO_HEADER_ZC_HOSKILLINFO_UPDATE 0x0239
+#define RO_HEADER_ZC_HO_PAR_CHANGE 0x07db
+#define RO_HEADER_ZC_INVENTORY_TAB 0x0908
+#define RO_HEADER_ZC_ITEM_DISAPPEAR 0x00a1
+#define RO_HEADER_ZC_ITEM_ENTRY 0x009d
+#define RO_HEADER_ZC_ITEM_PICKUP_ACK 0x0990
+#define RO_HEADER_ZC_ITEM_PICKUP_PARTY 0x02b8
+#define RO_HEADER_ZC_ITEM_THROW_ACK 0x00af
+#define RO_HEADER_ZC_KILLER_POINT 0x0236
+#define RO_HEADER_ZC_KILLER_RANK 0x0238
+#define RO_HEADER_ZC_LONGPAR_CHANGE 0x00b1
+#define RO_HEADER_ZC_MAKABLEITEMLIST 0x018d
+#define RO_HEADER_ZC_MAKINGARROW_LIST 0x01ad
+#define RO_HEADER_ZC_MAKINGITEM_LIST 0x025a
+#define RO_HEADER_ZC_MEMBERMGR_INFO 0x0154
+#define RO_HEADER_ZC_MEMBER_EXIT 0x00dd
+#define RO_HEADER_ZC_MEMBER_NEWENTRY 0x00dc
+#define RO_HEADER_ZC_MENU_LIST 0x00b7
+#define RO_HEADER_ZC_MERGE_ITEM_OPEN 0x096d
+#define RO_HEADER_ZC_MILLENNIUMSHIELD 0x0440
+#define RO_HEADER_ZC_MONSTER_INFO 0x018c
+#define RO_HEADER_ZC_MSG 0x0291
+#define RO_HEADER_ZC_MSG_COLOR 0x09cd
+#define RO_HEADER_ZC_MSG_SKILL 0x07e6
+#define RO_HEADER_ZC_MSG_VALUE 0x07e2
+#define RO_HEADER_ZC_MVP 0x010c
+#define RO_HEADER_ZC_MVP_GETTING_ITEM 0x010a
+#define RO_HEADER_ZC_MVP_GETTING_SPECIAL_EXP 0x010b
+#define RO_HEADER_ZC_MYGUILD_BASIC_INFO 0x014c
+#define RO_HEADER_ZC_MYITEMLIST_BUYING_STORE 0x0813
+#define RO_HEADER_ZC_NOTIFY_ACT 0x02e1
+#define RO_HEADER_ZC_NOTIFY_BARGAIN_SALE_CLOSE 0x09b3
+#define RO_HEADER_ZC_NOTIFY_BARGAIN_SALE_SELLING 0x09b2
+#define RO_HEADER_ZC_NOTIFY_BIND_ON_EQUIP 0x02d3
+#define RO_HEADER_ZC_NOTIFY_CARTITEM_COUNTINFO 0x0121
+#define RO_HEADER_ZC_NOTIFY_CHAT 0x008d
+#define RO_HEADER_ZC_NOTIFY_CHAT_PARTY 0x0109
+#define RO_HEADER_ZC_NOTIFY_CLAN_CHAT 0x098e
+#define RO_HEADER_ZC_NOTIFY_CLAN_CONNECTINFO 0x0988
+#define RO_HEADER_ZC_NOTIFY_EFFECT 0x019b
+#define RO_HEADER_ZC_NOTIFY_EFFECT3 0x0284
+#define RO_HEADER_ZC_NOTIFY_GROUNDSKILL 0x0117
+#define RO_HEADER_ZC_NOTIFY_HP_TO_GROUPM 0x080e
+#define RO_HEADER_ZC_NOTIFY_MANNER_POINT_GIVEN 0x014b
+#define RO_HEADER_ZC_NOTIFY_MAPINFO 0x0189
+#define RO_HEADER_ZC_NOTIFY_MAPPROPERTY2 0x01d6
+#define RO_HEADER_ZC_NOTIFY_PLAYERMOVE 0x0087
+#define RO_HEADER_ZC_NOTIFY_POSITION_TO_GROUPM 0x0107
+#define RO_HEADER_ZC_NOTIFY_POSITION_TO_GUILDM 0x01eb
+#define RO_HEADER_ZC_NOTIFY_SKILL 0x01de
+#define RO_HEADER_ZC_NOTIFY_SKILL_POSITION 0x0115
+#define RO_HEADER_ZC_NOTIFY_STOREITEM_COUNTINFO 0x00f2
+#define RO_HEADER_ZC_NOTIFY_TIME 0x007f
+#define RO_HEADER_ZC_NOTIFY_VANISH 0x0080
+#define RO_HEADER_ZC_NOTIFY_WEAPONITEMLIST 0x0221
+#define RO_HEADER_ZC_NPCACK_MAPMOVE 0x0091
+#define RO_HEADER_ZC_NPCACK_SERVERMOVE 0x0092
+#define RO_HEADER_ZC_NPCSPRITE_CHANGE 0x01b0
+#define RO_HEADER_ZC_NPC_SHOWEFST_UPDATE 0x028a
+#define RO_HEADER_ZC_OPENSTORE 0x012d
+#define RO_HEADER_ZC_OPEN_EDITDLG 0x0142
+#define RO_HEADER_ZC_OPEN_EDITDLGSTR 0x01d4
+#define RO_HEADER_ZC_OPEN_SEARCH_STORE_INFO 0x083a
+#define RO_HEADER_ZC_PARTY_CONFIG 0x02c9
+#define RO_HEADER_ZC_PARTY_JOIN_REQ 0x02c6
+#define RO_HEADER_ZC_PARTY_JOIN_REQ_ACK 0x02c5
+#define RO_HEADER_ZC_PARTY_JOIN_REQ_ACK_FROM_MASTER 0x0afa
+#define RO_HEADER_ZC_PARTY_REQ_MASTER_TO_JOIN 0x0ae7
+#define RO_HEADER_ZC_PAR_CHANGE 0x00b0
+#define RO_HEADER_ZC_PAR_CHANGE_USER 0x01ab
+#define RO_HEADER_ZC_PC_CASH_POINT_ITEMLIST 0x0287
+#define RO_HEADER_ZC_PC_PURCHASE_ITEMLIST 0x00c6
+#define RO_HEADER_ZC_PC_PURCHASE_ITEMLIST_FROMMC 0x0800
+#define RO_HEADER_ZC_PC_PURCHASE_MYITEMLIST 0x0136
+#define RO_HEADER_ZC_PC_PURCHASE_RESULT 0x00ca
+#define RO_HEADER_ZC_PC_PURCHASE_RESULT_FROMMC 0x0135
+#define RO_HEADER_ZC_PC_SELL_ITEMLIST 0x00c7
+#define RO_HEADER_ZC_PERSONAL_INFOMATION 0x097b
+#define RO_HEADER_ZC_PET_ACT 0x01aa
+#define RO_HEADER_ZC_PLAY_NPC_BGM 0x07fe
+#define RO_HEADER_ZC_POSITION_ID_NAME_INFO 0x0166
+#define RO_HEADER_ZC_POSITION_INFO 0x0160
+#define RO_HEADER_ZC_PROPERTY_HOMUN 0x022e
+#define RO_HEADER_ZC_PROPERTY_PET 0x01a2
+#define RO_HEADER_ZC_RECOVERY 0x013d
+#define RO_HEADER_ZC_REFUSE_ENTER 0x0074
+#define RO_HEADER_ZC_REFUSE_ENTER_ROOM 0x00da
+#define RO_HEADER_ZC_REMOVE_EFFECT 0x0b0d
+#define RO_HEADER_ZC_REPAIRITEMLIST 0x01fc
+#define RO_HEADER_ZC_REPUTE_INFO 0x0b8d
+#define RO_HEADER_ZC_REPUTE_OPEN 0x0b8e
+#define RO_HEADER_ZC_REQ_ALLY_GUILD 0x0171
+#define RO_HEADER_ZC_REQ_EXCHANGE_ITEM 0x01f4
+#define RO_HEADER_ZC_REQ_JOIN_GUILD 0x016a
+#define RO_HEADER_ZC_REQ_TAKEOFF_EQUIP_ACK 0x099a
+#define RO_HEADER_ZC_REQ_WEAR_EQUIP_ACK 0x0999
+#define RO_HEADER_ZC_RESTART_ACK 0x00b3
+#define RO_HEADER_ZC_RESULT_MAKE_GUILD 0x0167
+#define RO_HEADER_ZC_RESURRECTION 0x0148
+#define RO_HEADER_ZC_ROLE_CHANGE 0x00e1
+#define RO_HEADER_ZC_ROOM_NEWENTRY 0x00d7
+#define RO_HEADER_ZC_SAY_DIALOG 0x00b4
+#define RO_HEADER_ZC_SAY_DIALOG2 0x00b4
+#define RO_HEADER_ZC_SEARCH_STORE_INFO_ACK 0x0836
+#define RO_HEADER_ZC_SEARCH_STORE_INFO_FAILED 0x0837
+#define RO_HEADER_ZC_SELECT_DEALTYPE 0x00c4
+#define RO_HEADER_ZC_SETTING_WHISPER_PC 0x00d1
+#define RO_HEADER_ZC_SETTING_WHISPER_STATE 0x00d2
+#define RO_HEADER_ZC_SE_CASHSHOP_OPEN 0x0845
+#define RO_HEADER_ZC_SE_PC_BUY_CASHITEM_RESULT 0x0849
+#define RO_HEADER_ZC_SHORTCUT_KEY_LIST 0x07d9
+#define RO_HEADER_ZC_SHOW_IMAGE 0x01b3
+#define RO_HEADER_ZC_SKILLINFO_DELETE 0x0441
+#define RO_HEADER_ZC_SKILLINFO_LIST 0x010f
+#define RO_HEADER_ZC_SKILLINFO_UPDATE 0x010e
+#define RO_HEADER_ZC_SKILLINFO_UPDATE2 0x07e1
+#define RO_HEADER_ZC_SKILLMSG 0x0215
+#define RO_HEADER_ZC_SKILL_DISAPPEAR 0x0120
+#define RO_HEADER_ZC_SKILL_POSTDELAY 0x043d
+#define RO_HEADER_ZC_SKILL_SELECT_REQUEST 0x0442
+#define RO_HEADER_ZC_SKILL_UPDATE 0x01ac
+#define RO_HEADER_ZC_SOUND 0x01d3
+#define RO_HEADER_ZC_SPIRITS 0x01d0
+#define RO_HEADER_ZC_SPIRITS2 0x01e1
+#define RO_HEADER_ZC_SPIRITS_ATTRIBUTE 0x08cf
+#define RO_HEADER_ZC_SSILIST_ITEM_CLICK_ACK 0x083d
+#define RO_HEADER_ZC_START_CAPTURE 0x019e
+#define RO_HEADER_ZC_STATE_CHANGE 0x0229
+#define RO_HEADER_ZC_STATUS 0x00bd
+#define RO_HEADER_ZC_STATUS_CHANGE 0x00be
+#define RO_HEADER_ZC_STATUS_CHANGE_ACK 0x00bc
+#define RO_HEADER_ZC_STOPMOVE 0x0088
+#define RO_HEADER_ZC_STORE_ENTRY 0x0131
+#define RO_HEADER_ZC_STYLE_CHANGE_RES 0x0a47
+#define RO_HEADER_ZC_SUMMON_HP_INIT 0x0b6b
+#define RO_HEADER_ZC_SUMMON_HP_UPDATE 0x0b6c
+#define RO_HEADER_ZC_TAEKWON_POINT 0x0224
+#define RO_HEADER_ZC_TAEKWON_RANK 0x0226
+#define RO_HEADER_ZC_TALKBOX_CHATCONTENTS 0x0191
+#define RO_HEADER_ZC_TARGET_SPIRITS 0x0b68
+#define RO_HEADER_ZC_THROW_MVPITEM 0x010d
+#define RO_HEADER_ZC_TRYCAPTURE_MONSTER 0x01a0
+#define RO_HEADER_ZC_UI_OPEN_V3 0x0b9a
+#define RO_HEADER_ZC_UPDATE_CHARSTAT 0x01f2
+#define RO_HEADER_ZC_UPDATE_GDID 0x016c
+#define RO_HEADER_ZC_UPDATE_MAPINFO 0x0192
+#define RO_HEADER_ZC_UPDATE_RANKING_POINT 0x097e
+#define RO_HEADER_ZC_USER_COUNT 0x00c2
+#define RO_HEADER_ZC_USESKILL_ACK 0x07fb
+#define RO_HEADER_ZC_USE_SKILL 0x011a
+#define RO_HEADER_ZC_WAIT_DIALOG 0x00b5
+#define RO_HEADER_ZC_WAIT_DIALOG2 0x00b5
+#define RO_HEADER_ZC_WARPLIST 0x011c
+#define RO_HEADER_ZC_WHISPER 0x0097
+#define RO_HEADER_ZC_WHISPER_LIST 0x00d4
+
+// Ids that rAthena picks by version in enum packet_headers (map/packets_struct.hpp).
+#define RO_TYPE_authError 0x083e
+#define RO_TYPE_authokType 0x02eb
+#define RO_TYPE_banking_checkType 0x09a6
+#define RO_TYPE_banking_deposit_ackType 0x09a8
+#define RO_TYPE_banking_withdraw_ackType 0x09aa
+#define RO_TYPE_bgqueue_ackType 0x08d8
+#define RO_TYPE_bgqueue_battlebeginackType 0x08e0
+#define RO_TYPE_bgqueue_battlebeginsType 0x08df
+#define RO_TYPE_bgqueue_checkstateType 0x090a
+#define RO_TYPE_bgqueue_notice_deleteType 0x08db
+#define RO_TYPE_bgqueue_notify_entryType 0x08d9
+#define RO_TYPE_bgqueue_registerType 0x08d7
+#define RO_TYPE_bgqueue_revokereqType 0x08da
+#define RO_TYPE_bgqueue_updateinfoType 0x08d9
+#define RO_TYPE_buyingStoreUpdateItemType 0x081b
+#define RO_TYPE_cart_additem_ackType 0x012c
+#define RO_TYPE_cartlistequipType 0x0994
+#define RO_TYPE_cartlistnormalType 0x0993
+#define RO_TYPE_clanLeave 0x0989
+#define RO_TYPE_clanMessage 0x098e
+#define RO_TYPE_clanOnlineCount 0x0988
+#define RO_TYPE_damageType 0x02e1
+#define RO_TYPE_dropflooritemType 0x084b
+#define RO_TYPE_equipitemType 0x0998
+#define RO_TYPE_graffiti_entryType 0x01c9
+#define RO_TYPE_guildExpulsion 0x0839
+#define RO_TYPE_guildLeave 0x015a
+#define RO_TYPE_idle_unitType 0x0915
+#define RO_TYPE_inventorylistequipType 0x0992
+#define RO_TYPE_inventorylistnormalType 0x0991
+#define RO_TYPE_item_drop_announceType 0x07fd
+#define RO_TYPE_maptypeproperty2Type 0x099b
+#define RO_TYPE_monsterhpType 0x0977
+#define RO_TYPE_notify_bounditemType 0x02d3
+#define RO_TYPE_notifybindonequip 0x02d3
+#define RO_TYPE_openvendingType 0x0136
+#define RO_TYPE_package_item_announceType 0x07fd
+#define RO_TYPE_partyinfo 0x00fb
+#define RO_TYPE_partyleaderchangedType 0x07fc
+#define RO_TYPE_partymemberinfo 0x01e9
+#define RO_TYPE_questAddType 0x02b3
+#define RO_TYPE_questListType 0x02b1
+#define RO_TYPE_questUpdateType 0x02b5
+#define RO_TYPE_questUpdateType2 0x08fe
+#define RO_TYPE_reqName 0x0095
+#define RO_TYPE_rodexdelete 0x09f6
+#define RO_TYPE_rodexgetitem 0x09f4
+#define RO_TYPE_rodexgetzeny 0x09f2
+#define RO_TYPE_rodexicon 0x09e7
+#define RO_TYPE_rodexmailList 0x09f0
+#define RO_TYPE_rodexnextpage 0x09f0
+#define RO_TYPE_rodexopenwrite 0x0a12
+#define RO_TYPE_rodexremoveitem 0x0a07
+#define RO_TYPE_rodexwriteresult 0x09ed
+#define RO_TYPE_rouletteinfoackType 0x0a1c
+#define RO_TYPE_roulettercvitemackType 0x0a22
+#define RO_TYPE_roulettgenerateackType 0x0a20
+#define RO_TYPE_sc_notickType 0x0196
+#define RO_TYPE_script_clearType 0x08d6
+#define RO_TYPE_sendLookType 0x01d7
+#define RO_TYPE_skilWarpPointType 0x011c
+#define RO_TYPE_skill_entryType 0x099f
+#define RO_TYPE_spawn_unitType 0x090f
+#define RO_TYPE_status_change2Type 0x043f
+#define RO_TYPE_status_changeType 0x0983
+#define RO_TYPE_status_change_endType 0x0196
+#define RO_TYPE_storageListEquipType 0x0996
+#define RO_TYPE_storageListNormalType 0x0995
+#define RO_TYPE_unequipitemackType 0x099a
+#define RO_TYPE_unit_walkingType 0x0914
+#define RO_TYPE_useItemAckType 0x01c8
+#define RO_TYPE_wisendType 0x0098
+
+// Offsets of the first entry in list packets.
+#define RO_ITEMLIST_EQUIP_HEAD 4
+#define RO_ITEMLIST_NORMAL_HEAD 4
 
 // Client-to-map packets as the map server parses them: id, length, field offsets.
 #define RO_CZ_ACTIONREQUEST 0x0889 // length 7; fields at 2,6
@@ -640,6 +1142,12 @@ typedef struct __attribute__((packed)) RO_PACKET_CA_LOGIN {
     uint8_t clienttype;
 } RO_PACKET_CA_LOGIN;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_CA_LOGIN) == 55, "RO_PACKET_CA_LOGIN size");
+#define RO_HAVE_PACKET_CA_LOGIN 1
+#define RO_HAS_PACKET_CA_LOGIN_packetType 1
+#define RO_HAS_PACKET_CA_LOGIN_version 1
+#define RO_HAS_PACKET_CA_LOGIN_username 1
+#define RO_HAS_PACKET_CA_LOGIN_password 1
+#define RO_HAS_PACKET_CA_LOGIN_clienttype 1
 
 typedef struct __attribute__((packed)) RO_PACKET_AC_ACCEPT_LOGIN_sub {
     uint32_t ip;
@@ -650,6 +1158,13 @@ typedef struct __attribute__((packed)) RO_PACKET_AC_ACCEPT_LOGIN_sub {
     uint16_t new_;
 } RO_PACKET_AC_ACCEPT_LOGIN_sub;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_AC_ACCEPT_LOGIN_sub) == 32, "RO_PACKET_AC_ACCEPT_LOGIN_sub size");
+#define RO_HAVE_PACKET_AC_ACCEPT_LOGIN_sub 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sub_ip 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sub_port 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sub_name 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sub_users 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sub_type 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sub_new_ 1
 
 typedef struct __attribute__((packed)) RO_PACKET_AC_ACCEPT_LOGIN {
     int16_t packetType;
@@ -663,6 +1178,16 @@ typedef struct __attribute__((packed)) RO_PACKET_AC_ACCEPT_LOGIN {
     // followed by: RO_PACKET_AC_ACCEPT_LOGIN_sub char_servers[]
 } RO_PACKET_AC_ACCEPT_LOGIN;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_AC_ACCEPT_LOGIN) == 47, "RO_PACKET_AC_ACCEPT_LOGIN size");
+#define RO_HAVE_PACKET_AC_ACCEPT_LOGIN 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_packetType 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_packetLength 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_login_id1 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_AID 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_login_id2 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_last_ip 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_last_login 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_sex 1
+#define RO_HAS_PACKET_AC_ACCEPT_LOGIN_char_servers 1
 
 typedef struct __attribute__((packed)) RO_PACKET_AC_REFUSE_LOGIN {
     int16_t packetType;
@@ -670,6 +1195,10 @@ typedef struct __attribute__((packed)) RO_PACKET_AC_REFUSE_LOGIN {
     char unblock_time[20];
 } RO_PACKET_AC_REFUSE_LOGIN;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_AC_REFUSE_LOGIN) == 26, "RO_PACKET_AC_REFUSE_LOGIN size");
+#define RO_HAVE_PACKET_AC_REFUSE_LOGIN 1
+#define RO_HAS_PACKET_AC_REFUSE_LOGIN_packetType 1
+#define RO_HAS_PACKET_AC_REFUSE_LOGIN_error 1
+#define RO_HAS_PACKET_AC_REFUSE_LOGIN_unblock_time 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_ACCEPT_ENTER2 {
     int16_t packetType;
@@ -682,6 +1211,15 @@ typedef struct __attribute__((packed)) RO_PACKET_HC_ACCEPT_ENTER2 {
     char extension[20];
 } RO_PACKET_HC_ACCEPT_ENTER2;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_ACCEPT_ENTER2) == 29, "RO_PACKET_HC_ACCEPT_ENTER2 size");
+#define RO_HAVE_PACKET_HC_ACCEPT_ENTER2 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_packetType 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_packetLength 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_normal 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_premium 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_billing 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_producible 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_total 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER2_extension 1
 
 typedef struct __attribute__((packed)) RO_CHARACTER_INFO {
     uint32_t GID;
@@ -728,6 +1266,49 @@ typedef struct __attribute__((packed)) RO_CHARACTER_INFO {
     int32_t chr_name_changeCnt;
 } RO_CHARACTER_INFO;
 RO_STATIC_ASSERT(sizeof(RO_CHARACTER_INFO) == 144, "RO_CHARACTER_INFO size");
+#define RO_HAVE_CHARACTER_INFO 1
+#define RO_HAS_CHARACTER_INFO_GID 1
+#define RO_HAS_CHARACTER_INFO_exp 1
+#define RO_HAS_CHARACTER_INFO_money 1
+#define RO_HAS_CHARACTER_INFO_jobexp 1
+#define RO_HAS_CHARACTER_INFO_joblevel 1
+#define RO_HAS_CHARACTER_INFO_bodystate 1
+#define RO_HAS_CHARACTER_INFO_healthstate 1
+#define RO_HAS_CHARACTER_INFO_effectstate 1
+#define RO_HAS_CHARACTER_INFO_virtue 1
+#define RO_HAS_CHARACTER_INFO_honor 1
+#define RO_HAS_CHARACTER_INFO_jobpoint 1
+#define RO_HAS_CHARACTER_INFO_hp 1
+#define RO_HAS_CHARACTER_INFO_maxhp 1
+#define RO_HAS_CHARACTER_INFO_sp 1
+#define RO_HAS_CHARACTER_INFO_maxsp 1
+#define RO_HAS_CHARACTER_INFO_speed 1
+#define RO_HAS_CHARACTER_INFO_job 1
+#define RO_HAS_CHARACTER_INFO_head 1
+#define RO_HAS_CHARACTER_INFO_weapon 1
+#define RO_HAS_CHARACTER_INFO_level 1
+#define RO_HAS_CHARACTER_INFO_sppoint 1
+#define RO_HAS_CHARACTER_INFO_accessory 1
+#define RO_HAS_CHARACTER_INFO_shield 1
+#define RO_HAS_CHARACTER_INFO_accessory2 1
+#define RO_HAS_CHARACTER_INFO_accessory3 1
+#define RO_HAS_CHARACTER_INFO_headpalette 1
+#define RO_HAS_CHARACTER_INFO_bodypalette 1
+#define RO_HAS_CHARACTER_INFO_name 1
+#define RO_HAS_CHARACTER_INFO_Str 1
+#define RO_HAS_CHARACTER_INFO_Agi 1
+#define RO_HAS_CHARACTER_INFO_Vit 1
+#define RO_HAS_CHARACTER_INFO_Int 1
+#define RO_HAS_CHARACTER_INFO_Dex 1
+#define RO_HAS_CHARACTER_INFO_Luk 1
+#define RO_HAS_CHARACTER_INFO_CharNum 1
+#define RO_HAS_CHARACTER_INFO_hairColor 1
+#define RO_HAS_CHARACTER_INFO_bIsChangedCharName 1
+#define RO_HAS_CHARACTER_INFO_mapName 1
+#define RO_HAS_CHARACTER_INFO_DelRevDate 1
+#define RO_HAS_CHARACTER_INFO_robePalette 1
+#define RO_HAS_CHARACTER_INFO_chr_slot_changeCnt 1
+#define RO_HAS_CHARACTER_INFO_chr_name_changeCnt 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_ACCEPT_ENTER {
     int16_t packetType;
@@ -739,18 +1320,32 @@ typedef struct __attribute__((packed)) RO_PACKET_HC_ACCEPT_ENTER {
     // followed by: RO_CHARACTER_INFO characters[]
 } RO_PACKET_HC_ACCEPT_ENTER;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_ACCEPT_ENTER) == 27, "RO_PACKET_HC_ACCEPT_ENTER size");
+#define RO_HAVE_PACKET_HC_ACCEPT_ENTER 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_packetType 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_packetLength 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_total 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_premium_start 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_premium_end 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_extension 1
+#define RO_HAS_PACKET_HC_ACCEPT_ENTER_characters 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_REFUSE_ENTER {
     int16_t packetType;
     uint8_t error;
 } RO_PACKET_HC_REFUSE_ENTER;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_REFUSE_ENTER) == 3, "RO_PACKET_HC_REFUSE_ENTER size");
+#define RO_HAVE_PACKET_HC_REFUSE_ENTER 1
+#define RO_HAS_PACKET_HC_REFUSE_ENTER_packetType 1
+#define RO_HAS_PACKET_HC_REFUSE_ENTER_error 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_CHARLIST_NOTIFY {
     int16_t packetType;
     uint32_t total;
 } RO_PACKET_HC_CHARLIST_NOTIFY;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_CHARLIST_NOTIFY) == 6, "RO_PACKET_HC_CHARLIST_NOTIFY size");
+#define RO_HAVE_PACKET_HC_CHARLIST_NOTIFY 1
+#define RO_HAS_PACKET_HC_CHARLIST_NOTIFY_packetType 1
+#define RO_HAS_PACKET_HC_CHARLIST_NOTIFY_total 1
 
 typedef struct __attribute__((packed)) RO_PACKET_CH_MAKE_CHAR {
     int16_t packetType;
@@ -760,24 +1355,39 @@ typedef struct __attribute__((packed)) RO_PACKET_CH_MAKE_CHAR {
     uint16_t hair_style;
 } RO_PACKET_CH_MAKE_CHAR;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_CH_MAKE_CHAR) == 31, "RO_PACKET_CH_MAKE_CHAR size");
+#define RO_HAVE_PACKET_CH_MAKE_CHAR 1
+#define RO_HAS_PACKET_CH_MAKE_CHAR_packetType 1
+#define RO_HAS_PACKET_CH_MAKE_CHAR_name 1
+#define RO_HAS_PACKET_CH_MAKE_CHAR_slot 1
+#define RO_HAS_PACKET_CH_MAKE_CHAR_hair_color 1
+#define RO_HAS_PACKET_CH_MAKE_CHAR_hair_style 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_ACCEPT_MAKECHAR {
     int16_t packetType;
     RO_CHARACTER_INFO character;
 } RO_PACKET_HC_ACCEPT_MAKECHAR;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_ACCEPT_MAKECHAR) == 146, "RO_PACKET_HC_ACCEPT_MAKECHAR size");
+#define RO_HAVE_PACKET_HC_ACCEPT_MAKECHAR 1
+#define RO_HAS_PACKET_HC_ACCEPT_MAKECHAR_packetType 1
+#define RO_HAS_PACKET_HC_ACCEPT_MAKECHAR_character 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_REFUSE_MAKECHAR {
     int16_t packetType;
     uint8_t error;
 } RO_PACKET_HC_REFUSE_MAKECHAR;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_REFUSE_MAKECHAR) == 3, "RO_PACKET_HC_REFUSE_MAKECHAR size");
+#define RO_HAVE_PACKET_HC_REFUSE_MAKECHAR 1
+#define RO_HAS_PACKET_HC_REFUSE_MAKECHAR_packetType 1
+#define RO_HAS_PACKET_HC_REFUSE_MAKECHAR_error 1
 
 typedef struct __attribute__((packed)) RO_PACKET_CH_SELECT_CHAR {
     int16_t packetType;
     uint8_t slot;
 } RO_PACKET_CH_SELECT_CHAR;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_CH_SELECT_CHAR) == 3, "RO_PACKET_CH_SELECT_CHAR size");
+#define RO_HAVE_PACKET_CH_SELECT_CHAR 1
+#define RO_HAS_PACKET_CH_SELECT_CHAR_packetType 1
+#define RO_HAS_PACKET_CH_SELECT_CHAR_slot 1
 
 typedef struct __attribute__((packed)) RO_PACKET_HC_NOTIFY_ZONESVR {
     int16_t packetType;
@@ -787,17 +1397,28 @@ typedef struct __attribute__((packed)) RO_PACKET_HC_NOTIFY_ZONESVR {
     uint16_t port;
 } RO_PACKET_HC_NOTIFY_ZONESVR;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_HC_NOTIFY_ZONESVR) == 28, "RO_PACKET_HC_NOTIFY_ZONESVR size");
+#define RO_HAVE_PACKET_HC_NOTIFY_ZONESVR 1
+#define RO_HAS_PACKET_HC_NOTIFY_ZONESVR_packetType 1
+#define RO_HAS_PACKET_HC_NOTIFY_ZONESVR_CID 1
+#define RO_HAS_PACKET_HC_NOTIFY_ZONESVR_mapname 1
+#define RO_HAS_PACKET_HC_NOTIFY_ZONESVR_ip 1
+#define RO_HAS_PACKET_HC_NOTIFY_ZONESVR_port 1
 
 typedef struct __attribute__((packed)) RO_PACKET_PING {
     int16_t packetType;
     uint32_t AID;
 } RO_PACKET_PING;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_PING) == 6, "RO_PACKET_PING size");
+#define RO_HAVE_PACKET_PING 1
+#define RO_HAS_PACKET_PING_packetType 1
+#define RO_HAS_PACKET_PING_AID 1
 
 typedef struct __attribute__((packed)) RO_EQUIPSLOTINFO {
     uint16_t card[4];
 } RO_EQUIPSLOTINFO;
 RO_STATIC_ASSERT(sizeof(RO_EQUIPSLOTINFO) == 8, "RO_EQUIPSLOTINFO size");
+#define RO_HAVE_EQUIPSLOTINFO 1
+#define RO_HAS_EQUIPSLOTINFO_card 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ACCEPT_ENTER {
     int16_t packetType;
@@ -808,6 +1429,13 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_ACCEPT_ENTER {
     uint16_t font;
 } RO_PACKET_ZC_ACCEPT_ENTER;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ACCEPT_ENTER) == 13, "RO_PACKET_ZC_ACCEPT_ENTER size");
+#define RO_HAVE_PACKET_ZC_ACCEPT_ENTER 1
+#define RO_HAS_PACKET_ZC_ACCEPT_ENTER_packetType 1
+#define RO_HAS_PACKET_ZC_ACCEPT_ENTER_startTime 1
+#define RO_HAS_PACKET_ZC_ACCEPT_ENTER_posDir 1
+#define RO_HAS_PACKET_ZC_ACCEPT_ENTER_xSize 1
+#define RO_HAS_PACKET_ZC_ACCEPT_ENTER_ySize 1
+#define RO_HAS_PACKET_ZC_ACCEPT_ENTER_font 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NPCACK_MAPMOVE {
     int16_t packetType;
@@ -816,6 +1444,11 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NPCACK_MAPMOVE {
     uint16_t yPos;
 } RO_PACKET_ZC_NPCACK_MAPMOVE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NPCACK_MAPMOVE) == 22, "RO_PACKET_ZC_NPCACK_MAPMOVE size");
+#define RO_HAVE_PACKET_ZC_NPCACK_MAPMOVE 1
+#define RO_HAS_PACKET_ZC_NPCACK_MAPMOVE_packetType 1
+#define RO_HAS_PACKET_ZC_NPCACK_MAPMOVE_mapName 1
+#define RO_HAS_PACKET_ZC_NPCACK_MAPMOVE_xPos 1
+#define RO_HAS_PACKET_ZC_NPCACK_MAPMOVE_yPos 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_VANISH {
     int16_t packetType;
@@ -823,6 +1456,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_VANISH {
     uint8_t type;
 } RO_PACKET_ZC_NOTIFY_VANISH;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_VANISH) == 7, "RO_PACKET_ZC_NOTIFY_VANISH size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_VANISH 1
+#define RO_HAS_PACKET_ZC_NOTIFY_VANISH_packetType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_VANISH_gid 1
+#define RO_HAS_PACKET_ZC_NOTIFY_VANISH_type 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_PLAYERMOVE {
     int16_t packetType;
@@ -830,6 +1467,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_PLAYERMOVE {
     uint8_t moveData[6];
 } RO_PACKET_ZC_NOTIFY_PLAYERMOVE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_PLAYERMOVE) == 12, "RO_PACKET_ZC_NOTIFY_PLAYERMOVE size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_PLAYERMOVE 1
+#define RO_HAS_PACKET_ZC_NOTIFY_PLAYERMOVE_packetType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_PLAYERMOVE_moveStartTime 1
+#define RO_HAS_PACKET_ZC_NOTIFY_PLAYERMOVE_moveData 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_STOPMOVE {
     int16_t packetType;
@@ -838,6 +1479,11 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_STOPMOVE {
     uint16_t yPos;
 } RO_PACKET_ZC_STOPMOVE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_STOPMOVE) == 10, "RO_PACKET_ZC_STOPMOVE size");
+#define RO_HAVE_PACKET_ZC_STOPMOVE 1
+#define RO_HAS_PACKET_ZC_STOPMOVE_packetType 1
+#define RO_HAS_PACKET_ZC_STOPMOVE_AID 1
+#define RO_HAS_PACKET_ZC_STOPMOVE_xPos 1
+#define RO_HAS_PACKET_ZC_STOPMOVE_yPos 1
 
 typedef struct __attribute__((packed)) RO_packet_spawn_unit {
     int16_t PacketType;
@@ -874,6 +1520,39 @@ typedef struct __attribute__((packed)) RO_packet_spawn_unit {
     uint8_t isBoss;
 } RO_packet_spawn_unit;
 RO_STATIC_ASSERT(sizeof(RO_packet_spawn_unit) == 73, "RO_packet_spawn_unit size");
+#define RO_HAVE_packet_spawn_unit 1
+#define RO_HAS_packet_spawn_unit_PacketType 1
+#define RO_HAS_packet_spawn_unit_PacketLength 1
+#define RO_HAS_packet_spawn_unit_objecttype 1
+#define RO_HAS_packet_spawn_unit_GID 1
+#define RO_HAS_packet_spawn_unit_speed 1
+#define RO_HAS_packet_spawn_unit_bodyState 1
+#define RO_HAS_packet_spawn_unit_healthState 1
+#define RO_HAS_packet_spawn_unit_effectState 1
+#define RO_HAS_packet_spawn_unit_job 1
+#define RO_HAS_packet_spawn_unit_head 1
+#define RO_HAS_packet_spawn_unit_weapon 1
+#define RO_HAS_packet_spawn_unit_accessory 1
+#define RO_HAS_packet_spawn_unit_accessory2 1
+#define RO_HAS_packet_spawn_unit_accessory3 1
+#define RO_HAS_packet_spawn_unit_headpalette 1
+#define RO_HAS_packet_spawn_unit_bodypalette 1
+#define RO_HAS_packet_spawn_unit_headDir 1
+#define RO_HAS_packet_spawn_unit_robe 1
+#define RO_HAS_packet_spawn_unit_GUID 1
+#define RO_HAS_packet_spawn_unit_GEmblemVer 1
+#define RO_HAS_packet_spawn_unit_honor 1
+#define RO_HAS_packet_spawn_unit_virtue 1
+#define RO_HAS_packet_spawn_unit_isPKModeON 1
+#define RO_HAS_packet_spawn_unit_sex 1
+#define RO_HAS_packet_spawn_unit_PosDir 1
+#define RO_HAS_packet_spawn_unit_xSize 1
+#define RO_HAS_packet_spawn_unit_ySize 1
+#define RO_HAS_packet_spawn_unit_clevel 1
+#define RO_HAS_packet_spawn_unit_font 1
+#define RO_HAS_packet_spawn_unit_maxHP 1
+#define RO_HAS_packet_spawn_unit_HP 1
+#define RO_HAS_packet_spawn_unit_isBoss 1
 
 typedef struct __attribute__((packed)) RO_packet_unit_walking {
     int16_t PacketType;
@@ -911,6 +1590,40 @@ typedef struct __attribute__((packed)) RO_packet_unit_walking {
     uint8_t isBoss;
 } RO_packet_unit_walking;
 RO_STATIC_ASSERT(sizeof(RO_packet_unit_walking) == 80, "RO_packet_unit_walking size");
+#define RO_HAVE_packet_unit_walking 1
+#define RO_HAS_packet_unit_walking_PacketType 1
+#define RO_HAS_packet_unit_walking_PacketLength 1
+#define RO_HAS_packet_unit_walking_objecttype 1
+#define RO_HAS_packet_unit_walking_GID 1
+#define RO_HAS_packet_unit_walking_speed 1
+#define RO_HAS_packet_unit_walking_bodyState 1
+#define RO_HAS_packet_unit_walking_healthState 1
+#define RO_HAS_packet_unit_walking_effectState 1
+#define RO_HAS_packet_unit_walking_job 1
+#define RO_HAS_packet_unit_walking_head 1
+#define RO_HAS_packet_unit_walking_weapon 1
+#define RO_HAS_packet_unit_walking_accessory 1
+#define RO_HAS_packet_unit_walking_moveStartTime 1
+#define RO_HAS_packet_unit_walking_accessory2 1
+#define RO_HAS_packet_unit_walking_accessory3 1
+#define RO_HAS_packet_unit_walking_headpalette 1
+#define RO_HAS_packet_unit_walking_bodypalette 1
+#define RO_HAS_packet_unit_walking_headDir 1
+#define RO_HAS_packet_unit_walking_robe 1
+#define RO_HAS_packet_unit_walking_GUID 1
+#define RO_HAS_packet_unit_walking_GEmblemVer 1
+#define RO_HAS_packet_unit_walking_honor 1
+#define RO_HAS_packet_unit_walking_virtue 1
+#define RO_HAS_packet_unit_walking_isPKModeON 1
+#define RO_HAS_packet_unit_walking_sex 1
+#define RO_HAS_packet_unit_walking_MoveData 1
+#define RO_HAS_packet_unit_walking_xSize 1
+#define RO_HAS_packet_unit_walking_ySize 1
+#define RO_HAS_packet_unit_walking_clevel 1
+#define RO_HAS_packet_unit_walking_font 1
+#define RO_HAS_packet_unit_walking_maxHP 1
+#define RO_HAS_packet_unit_walking_HP 1
+#define RO_HAS_packet_unit_walking_isBoss 1
 
 typedef struct __attribute__((packed)) RO_packet_idle_unit {
     int16_t PacketType;
@@ -948,6 +1661,40 @@ typedef struct __attribute__((packed)) RO_packet_idle_unit {
     uint8_t isBoss;
 } RO_packet_idle_unit;
 RO_STATIC_ASSERT(sizeof(RO_packet_idle_unit) == 74, "RO_packet_idle_unit size");
+#define RO_HAVE_packet_idle_unit 1
+#define RO_HAS_packet_idle_unit_PacketType 1
+#define RO_HAS_packet_idle_unit_PacketLength 1
+#define RO_HAS_packet_idle_unit_objecttype 1
+#define RO_HAS_packet_idle_unit_GID 1
+#define RO_HAS_packet_idle_unit_speed 1
+#define RO_HAS_packet_idle_unit_bodyState 1
+#define RO_HAS_packet_idle_unit_healthState 1
+#define RO_HAS_packet_idle_unit_effectState 1
+#define RO_HAS_packet_idle_unit_job 1
+#define RO_HAS_packet_idle_unit_head 1
+#define RO_HAS_packet_idle_unit_weapon 1
+#define RO_HAS_packet_idle_unit_accessory 1
+#define RO_HAS_packet_idle_unit_accessory2 1
+#define RO_HAS_packet_idle_unit_accessory3 1
+#define RO_HAS_packet_idle_unit_headpalette 1
+#define RO_HAS_packet_idle_unit_bodypalette 1
+#define RO_HAS_packet_idle_unit_headDir 1
+#define RO_HAS_packet_idle_unit_robe 1
+#define RO_HAS_packet_idle_unit_GUID 1
+#define RO_HAS_packet_idle_unit_GEmblemVer 1
+#define RO_HAS_packet_idle_unit_honor 1
+#define RO_HAS_packet_idle_unit_virtue 1
+#define RO_HAS_packet_idle_unit_isPKModeON 1
+#define RO_HAS_packet_idle_unit_sex 1
+#define RO_HAS_packet_idle_unit_PosDir 1
+#define RO_HAS_packet_idle_unit_xSize 1
+#define RO_HAS_packet_idle_unit_ySize 1
+#define RO_HAS_packet_idle_unit_state 1
+#define RO_HAS_packet_idle_unit_clevel 1
+#define RO_HAS_packet_idle_unit_font 1
+#define RO_HAS_packet_idle_unit_maxHP 1
+#define RO_HAS_packet_idle_unit_HP 1
+#define RO_HAS_packet_idle_unit_isBoss 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_ACT {
     int16_t packetType;
@@ -962,6 +1709,17 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_ACT {
     int32_t damage2;
 } RO_PACKET_ZC_NOTIFY_ACT;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_ACT) == 33, "RO_PACKET_ZC_NOTIFY_ACT size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_ACT 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_packetType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_srcID 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_targetID 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_serverTick 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_srcSpeed 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_dmgSpeed 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_damage 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_div 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_type 1
+#define RO_HAS_PACKET_ZC_NOTIFY_ACT_damage2 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_ENTRY {
     int16_t packetType;
@@ -975,6 +1733,16 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_ENTRY {
     uint8_t subY;
 } RO_PACKET_ZC_ITEM_ENTRY;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ITEM_ENTRY) == 17, "RO_PACKET_ZC_ITEM_ENTRY size");
+#define RO_HAVE_PACKET_ZC_ITEM_ENTRY 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_packetType 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_AID 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_itemId 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_identify 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_x 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_y 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_amount 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_subX 1
+#define RO_HAS_PACKET_ZC_ITEM_ENTRY_subY 1
 
 typedef struct __attribute__((packed)) RO_packet_dropflooritem {
     int16_t PacketType;
@@ -989,12 +1757,26 @@ typedef struct __attribute__((packed)) RO_packet_dropflooritem {
     int16_t count;
 } RO_packet_dropflooritem;
 RO_STATIC_ASSERT(sizeof(RO_packet_dropflooritem) == 19, "RO_packet_dropflooritem size");
+#define RO_HAVE_packet_dropflooritem 1
+#define RO_HAS_packet_dropflooritem_PacketType 1
+#define RO_HAS_packet_dropflooritem_ITAID 1
+#define RO_HAS_packet_dropflooritem_ITID 1
+#define RO_HAS_packet_dropflooritem_type 1
+#define RO_HAS_packet_dropflooritem_IsIdentified 1
+#define RO_HAS_packet_dropflooritem_xPos 1
+#define RO_HAS_packet_dropflooritem_yPos 1
+#define RO_HAS_packet_dropflooritem_subX 1
+#define RO_HAS_packet_dropflooritem_subY 1
+#define RO_HAS_packet_dropflooritem_count 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_DISAPPEAR {
     int16_t packetType;
     uint32_t itemAid;
 } RO_PACKET_ZC_ITEM_DISAPPEAR;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ITEM_DISAPPEAR) == 6, "RO_PACKET_ZC_ITEM_DISAPPEAR size");
+#define RO_HAVE_PACKET_ZC_ITEM_DISAPPEAR 1
+#define RO_HAS_PACKET_ZC_ITEM_DISAPPEAR_packetType 1
+#define RO_HAS_PACKET_ZC_ITEM_DISAPPEAR_itemAid 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_PAR_CHANGE {
     int16_t PacketType;
@@ -1002,6 +1784,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_PAR_CHANGE {
     int32_t count;
 } RO_PACKET_ZC_PAR_CHANGE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_PAR_CHANGE) == 8, "RO_PACKET_ZC_PAR_CHANGE size");
+#define RO_HAVE_PACKET_ZC_PAR_CHANGE 1
+#define RO_HAS_PACKET_ZC_PAR_CHANGE_PacketType 1
+#define RO_HAS_PACKET_ZC_PAR_CHANGE_varID 1
+#define RO_HAS_PACKET_ZC_PAR_CHANGE_count 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_LONGPAR_CHANGE {
     int16_t PacketType;
@@ -1009,6 +1795,21 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_LONGPAR_CHANGE {
     int32_t amount;
 } RO_PACKET_ZC_LONGPAR_CHANGE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_LONGPAR_CHANGE) == 8, "RO_PACKET_ZC_LONGPAR_CHANGE size");
+#define RO_HAVE_PACKET_ZC_LONGPAR_CHANGE 1
+#define RO_HAS_PACKET_ZC_LONGPAR_CHANGE_PacketType 1
+#define RO_HAS_PACKET_ZC_LONGPAR_CHANGE_varID 1
+#define RO_HAS_PACKET_ZC_LONGPAR_CHANGE_amount 1
+
+typedef struct __attribute__((packed)) RO_ItemOptions {
+    int16_t index;
+    int16_t value;
+    uint8_t param;
+} RO_ItemOptions;
+RO_STATIC_ASSERT(sizeof(RO_ItemOptions) == 5, "RO_ItemOptions size");
+#define RO_HAVE_ItemOptions 1
+#define RO_HAS_ItemOptions_index 1
+#define RO_HAS_ItemOptions_value 1
+#define RO_HAS_ItemOptions_param 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_PICKUP_ACK {
     int16_t PacketType;
@@ -1026,6 +1827,20 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_PICKUP_ACK {
     uint16_t bindOnEquipType;
 } RO_PACKET_ZC_ITEM_PICKUP_ACK;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ITEM_PICKUP_ACK) == 31, "RO_PACKET_ZC_ITEM_PICKUP_ACK size");
+#define RO_HAVE_PACKET_ZC_ITEM_PICKUP_ACK 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_PacketType 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_Index 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_count 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_nameid 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_IsIdentified 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_IsDamaged 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_refiningLevel 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_slot 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_location 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_type 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_result 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_HireExpireDate 1
+#define RO_HAS_PACKET_ZC_ITEM_PICKUP_ACK_bindOnEquipType 1
 
 typedef struct __attribute__((packed)) RO_NORMALITEM_INFO {
     int16_t index;
@@ -1041,6 +1856,15 @@ typedef struct __attribute__((packed)) RO_NORMALITEM_INFO {
     } Flag;
 } RO_NORMALITEM_INFO;
 RO_STATIC_ASSERT(sizeof(RO_NORMALITEM_INFO) == 24, "RO_NORMALITEM_INFO size");
+#define RO_HAVE_NORMALITEM_INFO 1
+#define RO_HAS_NORMALITEM_INFO_index 1
+#define RO_HAS_NORMALITEM_INFO_ITID 1
+#define RO_HAS_NORMALITEM_INFO_type 1
+#define RO_HAS_NORMALITEM_INFO_count 1
+#define RO_HAS_NORMALITEM_INFO_WearState 1
+#define RO_HAS_NORMALITEM_INFO_slot 1
+#define RO_HAS_NORMALITEM_INFO_HireExpireDate 1
+#define RO_HAS_NORMALITEM_INFO_Flag 1
 
 typedef struct __attribute__((packed)) RO_EQUIPITEM_INFO {
     int16_t index;
@@ -1060,6 +1884,18 @@ typedef struct __attribute__((packed)) RO_EQUIPITEM_INFO {
     } Flag;
 } RO_EQUIPITEM_INFO;
 RO_STATIC_ASSERT(sizeof(RO_EQUIPITEM_INFO) == 31, "RO_EQUIPITEM_INFO size");
+#define RO_HAVE_EQUIPITEM_INFO 1
+#define RO_HAS_EQUIPITEM_INFO_index 1
+#define RO_HAS_EQUIPITEM_INFO_ITID 1
+#define RO_HAS_EQUIPITEM_INFO_type 1
+#define RO_HAS_EQUIPITEM_INFO_location 1
+#define RO_HAS_EQUIPITEM_INFO_WearState 1
+#define RO_HAS_EQUIPITEM_INFO_RefiningLevel 1
+#define RO_HAS_EQUIPITEM_INFO_slot 1
+#define RO_HAS_EQUIPITEM_INFO_HireExpireDate 1
+#define RO_HAS_EQUIPITEM_INFO_bindOnEquipType 1
+#define RO_HAS_EQUIPITEM_INFO_wItemSpriteNumber 1
+#define RO_HAS_EQUIPITEM_INFO_Flag 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_USE_ITEM_ACK {
     int16_t packetType;
@@ -1070,6 +1906,13 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_USE_ITEM_ACK {
     uint8_t result;
 } RO_PACKET_ZC_USE_ITEM_ACK;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_USE_ITEM_ACK) == 13, "RO_PACKET_ZC_USE_ITEM_ACK size");
+#define RO_HAVE_PACKET_ZC_USE_ITEM_ACK 1
+#define RO_HAS_PACKET_ZC_USE_ITEM_ACK_packetType 1
+#define RO_HAS_PACKET_ZC_USE_ITEM_ACK_index 1
+#define RO_HAS_PACKET_ZC_USE_ITEM_ACK_itemId 1
+#define RO_HAS_PACKET_ZC_USE_ITEM_ACK_AID 1
+#define RO_HAS_PACKET_ZC_USE_ITEM_ACK_amount 1
+#define RO_HAS_PACKET_ZC_USE_ITEM_ACK_result 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_THROW_ACK {
     int16_t packetType;
@@ -1077,6 +1920,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_ITEM_THROW_ACK {
     uint16_t count;
 } RO_PACKET_ZC_ITEM_THROW_ACK;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ITEM_THROW_ACK) == 6, "RO_PACKET_ZC_ITEM_THROW_ACK size");
+#define RO_HAVE_PACKET_ZC_ITEM_THROW_ACK 1
+#define RO_HAS_PACKET_ZC_ITEM_THROW_ACK_packetType 1
+#define RO_HAS_PACKET_ZC_ITEM_THROW_ACK_index 1
+#define RO_HAS_PACKET_ZC_ITEM_THROW_ACK_count 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_DELETE_ITEM_FROM_BODY {
     int16_t packetType;
@@ -1085,18 +1932,29 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_DELETE_ITEM_FROM_BODY {
     int16_t count;
 } RO_PACKET_ZC_DELETE_ITEM_FROM_BODY;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_DELETE_ITEM_FROM_BODY) == 8, "RO_PACKET_ZC_DELETE_ITEM_FROM_BODY size");
+#define RO_HAVE_PACKET_ZC_DELETE_ITEM_FROM_BODY 1
+#define RO_HAS_PACKET_ZC_DELETE_ITEM_FROM_BODY_packetType 1
+#define RO_HAS_PACKET_ZC_DELETE_ITEM_FROM_BODY_deleteType 1
+#define RO_HAS_PACKET_ZC_DELETE_ITEM_FROM_BODY_index 1
+#define RO_HAS_PACKET_ZC_DELETE_ITEM_FROM_BODY_count 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_TIME {
     int16_t packetType;
     uint32_t time;
 } RO_PACKET_ZC_NOTIFY_TIME;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_TIME) == 6, "RO_PACKET_ZC_NOTIFY_TIME size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_TIME 1
+#define RO_HAS_PACKET_ZC_NOTIFY_TIME_packetType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_TIME_time 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ATTACK_RANGE {
     int16_t PacketType;
     int16_t currentAttRange;
 } RO_PACKET_ZC_ATTACK_RANGE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ATTACK_RANGE) == 4, "RO_PACKET_ZC_ATTACK_RANGE size");
+#define RO_HAVE_PACKET_ZC_ATTACK_RANGE 1
+#define RO_HAS_PACKET_ZC_ATTACK_RANGE_PacketType 1
+#define RO_HAS_PACKET_ZC_ATTACK_RANGE_currentAttRange 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_REQ_WEAR_EQUIP_ACK {
     int16_t PacketType;
@@ -1106,6 +1964,12 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_REQ_WEAR_EQUIP_ACK {
     uint8_t result;
 } RO_PACKET_ZC_REQ_WEAR_EQUIP_ACK;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_REQ_WEAR_EQUIP_ACK) == 11, "RO_PACKET_ZC_REQ_WEAR_EQUIP_ACK size");
+#define RO_HAVE_PACKET_ZC_REQ_WEAR_EQUIP_ACK 1
+#define RO_HAS_PACKET_ZC_REQ_WEAR_EQUIP_ACK_PacketType 1
+#define RO_HAS_PACKET_ZC_REQ_WEAR_EQUIP_ACK_index 1
+#define RO_HAS_PACKET_ZC_REQ_WEAR_EQUIP_ACK_wearLocation 1
+#define RO_HAS_PACKET_ZC_REQ_WEAR_EQUIP_ACK_wItemSpriteNumber 1
+#define RO_HAS_PACKET_ZC_REQ_WEAR_EQUIP_ACK_result 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_STATUS {
     int16_t packetType;
@@ -1138,6 +2002,35 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_STATUS {
     int16_t plusASPD;
 } RO_PACKET_ZC_STATUS;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_STATUS) == 44, "RO_PACKET_ZC_STATUS size");
+#define RO_HAVE_PACKET_ZC_STATUS 1
+#define RO_HAS_PACKET_ZC_STATUS_packetType 1
+#define RO_HAS_PACKET_ZC_STATUS_point 1
+#define RO_HAS_PACKET_ZC_STATUS_str 1
+#define RO_HAS_PACKET_ZC_STATUS_standardStr 1
+#define RO_HAS_PACKET_ZC_STATUS_agi 1
+#define RO_HAS_PACKET_ZC_STATUS_standardAgi 1
+#define RO_HAS_PACKET_ZC_STATUS_vit 1
+#define RO_HAS_PACKET_ZC_STATUS_standardVit 1
+#define RO_HAS_PACKET_ZC_STATUS_int_ 1
+#define RO_HAS_PACKET_ZC_STATUS_standardInt 1
+#define RO_HAS_PACKET_ZC_STATUS_dex 1
+#define RO_HAS_PACKET_ZC_STATUS_standardDex 1
+#define RO_HAS_PACKET_ZC_STATUS_luk 1
+#define RO_HAS_PACKET_ZC_STATUS_standardLuk 1
+#define RO_HAS_PACKET_ZC_STATUS_attPower 1
+#define RO_HAS_PACKET_ZC_STATUS_refiningPower 1
+#define RO_HAS_PACKET_ZC_STATUS_max_mattPower 1
+#define RO_HAS_PACKET_ZC_STATUS_min_mattPower 1
+#define RO_HAS_PACKET_ZC_STATUS_itemdefPower 1
+#define RO_HAS_PACKET_ZC_STATUS_plusdefPower 1
+#define RO_HAS_PACKET_ZC_STATUS_mdefPower 1
+#define RO_HAS_PACKET_ZC_STATUS_plusmdefPower 1
+#define RO_HAS_PACKET_ZC_STATUS_hitSuccessValue 1
+#define RO_HAS_PACKET_ZC_STATUS_avoidSuccessValue 1
+#define RO_HAS_PACKET_ZC_STATUS_plusAvoidSuccessValue 1
+#define RO_HAS_PACKET_ZC_STATUS_criticalSuccessValue 1
+#define RO_HAS_PACKET_ZC_STATUS_ASPD 1
+#define RO_HAS_PACKET_ZC_STATUS_plusASPD 1
 
 typedef struct __attribute__((packed)) RO_PACKET_CZ_REQ_WEAR_EQUIP {
     int16_t packetType;
@@ -1145,6 +2038,10 @@ typedef struct __attribute__((packed)) RO_PACKET_CZ_REQ_WEAR_EQUIP {
     uint32_t position;
 } RO_PACKET_CZ_REQ_WEAR_EQUIP;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_CZ_REQ_WEAR_EQUIP) == 8, "RO_PACKET_CZ_REQ_WEAR_EQUIP size");
+#define RO_HAVE_PACKET_CZ_REQ_WEAR_EQUIP 1
+#define RO_HAS_PACKET_CZ_REQ_WEAR_EQUIP_packetType 1
+#define RO_HAS_PACKET_CZ_REQ_WEAR_EQUIP_index 1
+#define RO_HAS_PACKET_CZ_REQ_WEAR_EQUIP_position 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_CHAT {
     int16_t PacketType;
@@ -1153,6 +2050,11 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_CHAT {
     // followed by: char Message[]
 } RO_PACKET_ZC_NOTIFY_CHAT;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_CHAT) == 8, "RO_PACKET_ZC_NOTIFY_CHAT size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_CHAT 1
+#define RO_HAS_PACKET_ZC_NOTIFY_CHAT_PacketType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_CHAT_PacketLength 1
+#define RO_HAS_PACKET_ZC_NOTIFY_CHAT_GID 1
+#define RO_HAS_PACKET_ZC_NOTIFY_CHAT_Message 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_PLAYERCHAT {
     int16_t PacketType;
@@ -1160,6 +2062,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_PLAYERCHAT {
     // followed by: char Message[]
 } RO_PACKET_ZC_NOTIFY_PLAYERCHAT;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_PLAYERCHAT) == 4, "RO_PACKET_ZC_NOTIFY_PLAYERCHAT size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_PLAYERCHAT 1
+#define RO_HAS_PACKET_ZC_NOTIFY_PLAYERCHAT_PacketType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_PLAYERCHAT_PacketLength 1
+#define RO_HAS_PACKET_ZC_NOTIFY_PLAYERCHAT_Message 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_SPRITE_CHANGE {
     int16_t packetType;
@@ -1169,6 +2075,12 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_SPRITE_CHANGE {
     uint16_t val2;
 } RO_PACKET_ZC_SPRITE_CHANGE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_SPRITE_CHANGE) == 11, "RO_PACKET_ZC_SPRITE_CHANGE size");
+#define RO_HAVE_PACKET_ZC_SPRITE_CHANGE 1
+#define RO_HAS_PACKET_ZC_SPRITE_CHANGE_packetType 1
+#define RO_HAS_PACKET_ZC_SPRITE_CHANGE_AID 1
+#define RO_HAS_PACKET_ZC_SPRITE_CHANGE_type 1
+#define RO_HAS_PACKET_ZC_SPRITE_CHANGE_val 1
+#define RO_HAS_PACKET_ZC_SPRITE_CHANGE_val2 1
 
 typedef struct __attribute__((packed)) RO_SKILLDATA {
     uint16_t id;
@@ -1180,6 +2092,14 @@ typedef struct __attribute__((packed)) RO_SKILLDATA {
     uint8_t upFlag;
 } RO_SKILLDATA;
 RO_STATIC_ASSERT(sizeof(RO_SKILLDATA) == 37, "RO_SKILLDATA size");
+#define RO_HAVE_SKILLDATA 1
+#define RO_HAS_SKILLDATA_id 1
+#define RO_HAS_SKILLDATA_inf 1
+#define RO_HAS_SKILLDATA_level 1
+#define RO_HAS_SKILLDATA_sp 1
+#define RO_HAS_SKILLDATA_range2 1
+#define RO_HAS_SKILLDATA_name 1
+#define RO_HAS_SKILLDATA_upFlag 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_SKILLINFO_LIST {
     int16_t packetType;
@@ -1187,6 +2107,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_SKILLINFO_LIST {
     // followed by: RO_SKILLDATA skills[]
 } RO_PACKET_ZC_SKILLINFO_LIST;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_SKILLINFO_LIST) == 4, "RO_PACKET_ZC_SKILLINFO_LIST size");
+#define RO_HAVE_PACKET_ZC_SKILLINFO_LIST 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_LIST_packetType 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_LIST_packetLength 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_LIST_skills 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_SKILLINFO_UPDATE {
     uint16_t packetType;
@@ -1197,6 +2121,13 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_SKILLINFO_UPDATE {
     uint8_t upFlag;
 } RO_PACKET_ZC_SKILLINFO_UPDATE;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_SKILLINFO_UPDATE) == 11, "RO_PACKET_ZC_SKILLINFO_UPDATE size");
+#define RO_HAVE_PACKET_ZC_SKILLINFO_UPDATE 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_UPDATE_packetType 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_UPDATE_skillId 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_UPDATE_level 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_UPDATE_sp 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_UPDATE_range2 1
+#define RO_HAS_PACKET_ZC_SKILLINFO_UPDATE_upFlag 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_USESKILL_ACK {
     int16_t packetType;
@@ -1210,6 +2141,16 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_USESKILL_ACK {
     uint8_t disposable;
 } RO_PACKET_ZC_USESKILL_ACK;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_USESKILL_ACK) == 25, "RO_PACKET_ZC_USESKILL_ACK size");
+#define RO_HAVE_PACKET_ZC_USESKILL_ACK 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_packetType 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_srcId 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_dstId 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_x 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_y 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_skillId 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_element 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_delayTime 1
+#define RO_HAS_PACKET_ZC_USESKILL_ACK_disposable 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_ACK_TOUSESKILL {
     int16_t packetType;
@@ -1220,6 +2161,13 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_ACK_TOUSESKILL {
     uint8_t cause;
 } RO_PACKET_ZC_ACK_TOUSESKILL;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_ACK_TOUSESKILL) == 10, "RO_PACKET_ZC_ACK_TOUSESKILL size");
+#define RO_HAVE_PACKET_ZC_ACK_TOUSESKILL 1
+#define RO_HAS_PACKET_ZC_ACK_TOUSESKILL_packetType 1
+#define RO_HAS_PACKET_ZC_ACK_TOUSESKILL_skillId 1
+#define RO_HAS_PACKET_ZC_ACK_TOUSESKILL_btype 1
+#define RO_HAS_PACKET_ZC_ACK_TOUSESKILL_itemId 1
+#define RO_HAS_PACKET_ZC_ACK_TOUSESKILL_flag 1
+#define RO_HAS_PACKET_ZC_ACK_TOUSESKILL_cause 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_SKILL_POSTDELAY {
     int16_t PacketType;
@@ -1227,6 +2175,10 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_SKILL_POSTDELAY {
     uint32_t DelayTM;
 } RO_PACKET_ZC_SKILL_POSTDELAY;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_SKILL_POSTDELAY) == 8, "RO_PACKET_ZC_SKILL_POSTDELAY size");
+#define RO_HAVE_PACKET_ZC_SKILL_POSTDELAY 1
+#define RO_HAS_PACKET_ZC_SKILL_POSTDELAY_PacketType 1
+#define RO_HAS_PACKET_ZC_SKILL_POSTDELAY_SKID 1
+#define RO_HAS_PACKET_ZC_SKILL_POSTDELAY_DelayTM 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_SKILL {
     int16_t PacketType;
@@ -1242,6 +2194,18 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_NOTIFY_SKILL {
     int8_t action;
 } RO_PACKET_ZC_NOTIFY_SKILL;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_NOTIFY_SKILL) == 33, "RO_PACKET_ZC_NOTIFY_SKILL size");
+#define RO_HAVE_PACKET_ZC_NOTIFY_SKILL 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_PacketType 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_SKID 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_AID 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_targetID 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_startTime 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_attackMT 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_attackedMT 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_damage 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_level 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_count 1
+#define RO_HAS_PACKET_ZC_NOTIFY_SKILL_action 1
 
 typedef struct __attribute__((packed)) RO_PACKET_ZC_USE_SKILL {
     int16_t PacketType;
@@ -1252,6 +2216,13 @@ typedef struct __attribute__((packed)) RO_PACKET_ZC_USE_SKILL {
     int8_t result;
 } RO_PACKET_ZC_USE_SKILL;
 RO_STATIC_ASSERT(sizeof(RO_PACKET_ZC_USE_SKILL) == 15, "RO_PACKET_ZC_USE_SKILL size");
+#define RO_HAVE_PACKET_ZC_USE_SKILL 1
+#define RO_HAS_PACKET_ZC_USE_SKILL_PacketType 1
+#define RO_HAS_PACKET_ZC_USE_SKILL_SKID 1
+#define RO_HAS_PACKET_ZC_USE_SKILL_level 1
+#define RO_HAS_PACKET_ZC_USE_SKILL_targetAID 1
+#define RO_HAS_PACKET_ZC_USE_SKILL_srcAID 1
+#define RO_HAS_PACKET_ZC_USE_SKILL_result 1
 
 
 // Packet lengths, both directions: 0 = unknown, -1 = variable (length at offset 2).
@@ -2346,6 +3317,10 @@ static inline int ro_packet_len(int cmd) {
     case 0x0c22: return 12;
     case 0x0cf0: return 2;
     case 0x0cf1: return 10;
+    case 0x01c9: return 97;
+    case 0x0a1c: return -1;
+    case 0x0a20: return 21;
+    case 0x0a22: return 5;
     default: return 0;
     }
 }
