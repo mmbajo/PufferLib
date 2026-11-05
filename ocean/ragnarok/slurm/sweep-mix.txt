@@ -1,0 +1,3 @@
+# PufferLib's hyperparameter sweep on the three-task mix (field leveling, Swordman skills, survival),
+# for the final perf: slurm/submit.sh -t 2-00:00:00 train.sbatch 16 64 400000000 sweep-mix.txt
+sweep --env.task0_weight=1 --env.task1_weight=1 --env.task2_weight=1
