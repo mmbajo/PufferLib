@@ -18,13 +18,13 @@ MINUTES=${3:-10}
 RESET=${4:-600}
 node=$(hostname -s)
 job=$SLURM_JOB_ID
-export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-train}  # or ~/ragnarok/rathena-re (renewal)
+export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-re}  # or ~/ragnarok/rathena-train (pre-renewal)
 export WORLD_LEAN=1
 export WORLD_MAP_CONF=$'lockstep: yes\nautosave_time: 3600'
 RG=${RG:-/home/user02198/ragnarok/PufferLib/ocean/ragnarok}
 source $RG/slurm/world.sh
 world_check_client || exit 6
-wlog "node=$node job=$job cpus=$SLURM_CPUS_PER_TASK worlds=$NWORLDS bots=$NBOTS minutes=$MINUTES reset=$RESET rathena-train $(git -C $RATHENA log --oneline -1 | cut -c1-50)"
+wlog "node=$node job=$job cpus=$SLURM_CPUS_PER_TASK worlds=$NWORLDS bots=$NBOTS minutes=$MINUTES reset=$RESET $(basename $RATHENA) $(git -C $RATHENA log --oneline -1 | cut -c1-50)"
 
 others=$(squeue -u "$USER" -h -w "$node" -o %i | grep -vx "$job" | awk -v j=$job '$1 + 0 < j + 0')
 if [ -n "$others" ]; then

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-RA = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "ragnarok/rathena-train")
+RA = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "ragnarok/rathena-re")
 MAKEFILE = RA / "src/map/Makefile"
 BUILT = ("pre-re" if "-DPRERE" in MAKEFILE.read_text() else "re") if MAKEFILE.exists() else None
 RULES = sys.argv[2] if len(sys.argv) > 2 else BUILT or "pre-re"

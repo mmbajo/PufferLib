@@ -83,12 +83,12 @@ baselines are the scripted bots in `ragnarok_check.c`.
 
 1. Build rAthena with the patches:
    - `git am server/patches/*.patch` on rAthena `d4b8e7b`;
-   - then `./configure --enable-epoll --enable-packetver=20130618 --enable-prere=yes --with-maxconn=8192`
-     and `make server` (`slurm/build-train.sbatch`).
-   - Renewal 20221005 (`~/ragnarok/rathena-re`, which this branch's packet table speaks): the same
-     patches on the same commit, built with `--enable-packetver=20221005 --enable-prere=no`
-     (`slurm/submit.sh --export=ALL,RATHENA=$HOME/ragnarok/rathena-re,PACKETVER=20221005,PRERE=no
-     build-train.sbatch`). Pass `RATHENA=~/ragnarok/rathena-re` to the world jobs too.
+   - then `./configure --enable-epoll --enable-packetver=20221005 --with-maxconn=8192` (renewal) and
+     `make server`, as `slurm/build-train.sbatch` does in `~/ragnarok/rathena-re`. The bot client's
+     packet table speaks that build, and the world jobs use it by default.
+   - The earlier pre-renewal build is `~/ragnarok/rathena-train` (client 20130618, `PRERE=yes`).
+     World jobs use it with `RATHENA=~/ragnarok/rathena-train`, after regenerating the client's
+     tables for it (`client/README.md`).
 2. Build the toolchain image once (`slurm/build_image.sbatch`): CUDA 12.2 and clang 15.
 3. Train: `slurm/submit.sh slurm/train.sbatch NWORLDS NBOTS TIMESTEPS [RUNS_FILE]`. The job
    starts the worlds, builds the env and runs `./puffer train` (or each line of `RUNS_FILE`).
