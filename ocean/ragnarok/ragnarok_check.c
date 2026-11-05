@@ -1,7 +1,8 @@
 // ragnarok_check: drive one ragnarok env (world 0) without the trainer, to check the env and to
 // measure each task's scripted baseline.
 // Usage: ragnarok_check NUM_AGENTS STEPS POLICY TASK [ACTION_REPEAT]
-//   POLICY: random or scripted. TASK: a task number, or "mix" for all tasks equally. STEPS counts
+//   POLICY: random or scripted. TASK: a task number, "mix" for all tasks equally, or "curriculum"
+//   for all tasks drawn by the curriculum (see ragnarok.h). STEPS counts
 //   world steps (100 ms each); the policy decides every ACTION_REPEAT of them (default 1).
 // Needs a lockstep world (see slurm/env-check.sbatch) and RO_WORLD_ROOT, RO_DB_DIR.
 //
@@ -194,11 +195,18 @@ int main(int argc, char** argv) {
     dict_set(&kw, "reward_scale", 1.0);
     dict_set(&kw, "reward_job", 0.5);
     dict_set(&kw, "reward_death", -1.0);
+    int mix = !strcmp(task, "mix") || !strcmp(task, "curriculum");
     for (int t = 0; t < RG_NTASKS; t++) {
         char key[32];
         snprintf(key, sizeof key, "task%d_weight", t);
-        dict_set(&kw, key, !strcmp(task, "mix") || atoi(task) == t ? 1.0 : 0.0);
+        dict_set(&kw, key, mix || atoi(task) == t ? 1.0 : 0.0);
     }
+    dict_set(&kw, "curriculum", !strcmp(task, "curriculum"));
+    dict_set(&kw, "curriculum_floor", 0.05);
+    dict_set(&kw, "curriculum_unlock", 0.8);
+    dict_set(&kw, "curriculum_patience", 20000);
+    dict_set(&kw, "curriculum_fast", 0.002);
+    dict_set(&kw, "curriculum_slow", 0.0002);
     Env env;
     memset(&env, 0, sizeof env);
     double t = ro_ms();
@@ -245,7 +253,7 @@ int main(int argc, char** argv) {
            " per bot-step %.5f\n", use_script ? "scripted" : "random", task, repeat, steps, n, wall,
            steps * (double)n / wall, ret / steps / n);
     Log* l = &env.log;
-    if (l->n > 0 && strcmp(task, "mix")) {
+    if (l->n > 0 && !mix) {
         // The exp part of the reward, before the task's normalization: RG_TASK_REWARD for this task.
         int k = atoi(task);
         double exp_reward = (ret - l->deaths * -1.0) / steps / n * RG_TASK_REWARD[k] / RG_TASK_REWARD[RG_TASK_FIELD];
@@ -264,9 +272,10 @@ int main(int argc, char** argv) {
                l->act_wait / l->n, l->act_move / l->n, l->act_attack / l->n, l->act_pickup / l->n,
                l->act_potion / l->n, l->act_sit / l->n, l->act_skill / l->n);
         for (int k = 0; k < RG_NTASKS; k++)
-            if (l->task_n[k] > 0)
-                printf("  task %d %-13s episodes %.0f, perf %.3f\n", k, RG_TASK_NAMES[k], l->task_n[k],
-                       l->task_perf[k] / l->task_n[k]);
+            if (l->task_n[k] > 0 || l->curriculum > 0)
+                printf("  task %d %-15s episodes %.0f, perf %.3f, chance %.3f\n", k, RG_TASK_NAMES[k],
+                       l->task_n[k], l->task_n[k] > 0 ? l->task_perf[k] / l->task_n[k] : 0,
+                       l->curriculum > 0 ? l->task_p[k] / l->curriculum : 0);
     }
     int errors = 0;
     for (int i = 0; i < n; i++) {
