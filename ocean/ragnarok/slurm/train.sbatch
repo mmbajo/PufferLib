@@ -7,8 +7,11 @@
 # RUNS_FILE (optional) lists one run per line as extra ./puffer train arguments; the runs go one
 # after another, each into runs/<job>/<n>, and each on freshly started worlds: a training field
 # changes as it ages, so a run on worlds an earlier run used does not start where that one did
-# (WORLD_FRESH=0 keeps one set of worlds for all runs). BUILD_FLAGS (optional, e.g. --float for
-# float32 rollout buffers instead of bfloat16) go to build.sh. Training always runs on
+# (WORLD_FRESH=0 keeps one set of worlds for all runs). A line that starts with "sweep" runs
+# PufferLib's hyperparameter sweep instead (./puffer sweep, over config/ragnarok.ini's [sweep]
+# ranges), with the rest of the line as its arguments: its trials run one after another on the same
+# worlds, and its train.log has a "sweep run=..." line per trial. BUILD_FLAGS (optional, e.g.
+# --float for float32 rollout buffers instead of bfloat16) go to build.sh. Training always runs on
 # 002-partition-default with a limit over an hour (your rule, 2026-11-05).
 #SBATCH --job-name=ro-train
 #SBATCH --partition=002-partition-default
@@ -36,10 +39,9 @@ export WORLD_DB_PORT=$((40000 + job % 10000))
 nruns=1
 [ -n "$RUNS_FILE" ] && nruns=$(grep -cvE '^\s*(#|$)' "$RUNS_FILE")
 WORLD_FRESH=${WORLD_FRESH:-1}
-# Every env start claims a fresh block of accounts per world (see ocean/ragnarok/ragnarok.h), and a
-# run starts its envs twice (training, then the final evaluation).
-blocks_per_world=$([ "$WORLD_FRESH" = 1 ] && echo 1 || echo $nruns)
-export WORLD_ACCOUNT_BLOCKS=$((3 * blocks_per_world + 2))
+# Each env start takes the next block of accounts on its world, in turn (see ocean/ragnarok/ragnarok.h):
+# a run takes two (training, then the final evaluation), and a sweep two per trial.
+export WORLD_ACCOUNT_BLOCKS=8
 PUF=${PUF:-/home/user02198/ragnarok/PufferLib}  # a frozen worktree can be passed in
 export RG=$PUF/ocean/ragnarok
 source $RG/slurm/world.sh
@@ -98,8 +100,25 @@ while IFS= read -r args <&3; do
     export RO_WORLD_ROOT=$WORLD_ROOT RO_DB_DIR=$RATHENA/db RO_WORLD_PORT_BASE=$WORLD_PORT_BASE
     mkdir -p $RUN/$n
     echo "$(date '+%F %T') run $n: $args" | tee $RUN/$n/args.txt
+    mode=train
+    case "$args" in
+    sweep | "sweep "*)
+        # One env per world, so the sweep must not change vec.total_agents: every draw from
+        # [agents, agents + 1] rounds to agents when that is a power of 2. Only the final checkpoint
+        # of each trial is kept.
+        agents=$((NWORLDS * NBOTS))
+        if [ $((agents & (agents - 1))) != 0 ]; then
+            echo "run $n: a sweep needs worlds x bots to be a power of 2, not $agents"
+            status=6
+            continue
+        fi
+        mode="sweep --sweep.vec.total_agents.min=$agents --sweep.vec.total_agents.max=$((agents + 1))"
+        mode="$mode --base.checkpoint_interval=0"
+        args=${args#sweep}
+        ;;
+    esac
     srun --container-image=$IMG --container-mounts=$MOUNTS,$WORLD_ROOT:$WORLD_ROOT --container-workdir=$PUF \
-        bash -c "./puffer train --vec.total_agents=$((NWORLDS * NBOTS)) --vec.num_threads=$NWORLDS \
+        bash -c "./puffer $mode --vec.total_agents=$((NWORLDS * NBOTS)) --vec.num_threads=$NWORLDS \
             --env.num_agents=$NBOTS --train.total_timesteps=$TIMESTEPS \
             --base.checkpoint_dir=$RUN/$n/checkpoints --base.log_dir=$RUN/$n/logs $args \
             > $RUN/$n/train.log 2>&1"
