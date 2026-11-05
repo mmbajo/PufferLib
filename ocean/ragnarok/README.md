@@ -52,8 +52,8 @@ one GPU job on one node
     baseline so that every task pays the same at that level.
   - `perf`: exp per step relative to the task's scripted bot (1.0 = as good as that bot), logged
     per task as `<task>_perf`. Navigation pays the progress toward its target plus 1 on arrival,
-    and its perf is the speed on the way there. The mini-boss pays the share of the boss's HP the
-    bot removes plus 1 for the kill, and its perf is that share.
+    and its perf is the speed on the way there; travel does the same across maps. The mini-boss
+    pays the share of the boss's HP the bot removes plus 1 for the kill, and its perf is that share.
 - **One env per world**, since a world steps only when all of its bots are ready.
 
 Every class task is a first class at levels 25/25 with its skills, weapon and 30 Red Potions, on a
@@ -72,6 +72,7 @@ in `ragnarok_check.c` on renewal (job 5007175).
 | 7 `merchant_skills` | Merchant: Mammonite 10 with 200,000 zeny, Axe | `mjolnir_01` | 2.96 |
 | 8 `navigation` | The field's Novice, walking to a cell 10–120 cells away; the goal gives the way there | `prt_fild08` | 0.394 cells per step (about 70% arrive within 1,200 steps) |
 | 9 `boss` | One of the six class setups at random, against a mini-boss spawned 4–7 cells away: Toad, Eclipse, Vocal, Mastering or Dragon Fly (levels 18–47), which summon helpers | the class's map | 0.83 of the boss's HP removed per episode (0.29 deaths) |
+| 10 `travel` | The Swordman setup, walking to a cell on another map of the travel region (`prt_fild04`, `05`, `07`, `09`), 1–3 warps away; the goal gives the way there in grid squares, and the view marks warp portals | the travel region | 0.327 cells per step (about 80% arrive within 3,000 steps; the scripted bot plans over the whole map and the warps) |
 
 ## Layout
 

@@ -41,6 +41,7 @@
 #else
 #include "client/rathena_mobs.h"
 #endif
+#include "client/rathena_atlas.h"
 
 typedef float obs_t;
 #include "pufferenv.h"
@@ -49,26 +50,29 @@ typedef float obs_t;
 
 #define RG_TASKS_MAX 16  // goal one-hot width, with room for later tasks
 // Field leveling (a Novice), the first classes' skills (each at levels 25/25, on a field for its
-// level), survival (a weak Swordman among Peco Pecos), navigation (a Novice walking to a target cell)
-// and a mini-boss (a random first class against a boss next to it); server/npc/rl_train.txt sets
-// each one up.
+// level), survival (a weak Swordman among Peco Pecos), navigation (a Novice walking to a target cell),
+// a mini-boss (a random first class against a boss next to it) and travel (a Swordman walking to a
+// cell on another map, through warps); server/npc/rl_train.txt sets each one up.
 enum {
     RG_TASK_FIELD, RG_TASK_SWORD_SKILLS, RG_TASK_SURVIVAL, RG_TASK_MAGE_SKILLS, RG_TASK_ARCHER_SKILLS,
     RG_TASK_ACOLYTE_SKILLS, RG_TASK_THIEF_SKILLS, RG_TASK_MERCHANT_SKILLS, RG_TASK_NAVIGATION,
-    RG_TASK_BOSS, RG_NTASKS
+    RG_TASK_BOSS, RG_TASK_TRAVEL, RG_NTASKS
 };
 static const char* RG_TASK_NAMES[RG_NTASKS] = {"field",       "sword_skills",  "survival",
                                                "mage_skills", "archer_skills", "acolyte_skills",
-                                               "thief_skills", "merchant_skills", "navigation", "boss"};
+                                               "thief_skills", "merchant_skills", "navigation", "boss",
+                                               "travel"};
 // Each task's scripted policy (ragnarok_check, 64 bots): its base exp per step, against which perf
 // is measured, and the exp part of its reward per step (level-normalized exp, reward_scale 1), by
 // which the exp reward is normalized so that every task pays the same there; a death costs the same
-// everywhere. Jobs 5007175 and 5007250 (the mini-boss) measured all of them on renewal (client
-// 20221005, 12,000 steps per task), so perf does not compare with the pre-renewal G0 and G1 runs.
+// everywhere. Jobs 5007175, 5007250 (the mini-boss) and 5007367 (travel, with 3,000-step episodes)
+// measured all of them on renewal (client 20221005, 12,000 or more steps per task), so perf does not
+// compare with the pre-renewal G0 and G1 runs.
 static const float RG_TASK_BASELINE[RG_NTASKS] = {2.314f, 2.293f, 2.379f, 2.246f, 3.541f,
-                                                  2.646f, 2.944f, 2.958f, 0.394f, 0.830f};
+                                                  2.646f, 2.944f, 2.958f, 0.394f, 0.830f, 0.327f};
 static const float RG_TASK_REWARD[RG_NTASKS] = {0.005121f, 0.000218f, 0.000428f, 0.000230f, 0.000361f,
-                                                0.000251f, 0.000303f, 0.000300f, 0.005184f, 0.010046f};
+                                                0.000251f, 0.000303f, 0.000300f, 0.005184f, 0.010046f,
+                                                0.001027f};
 // Navigation: a target the bot can walk to, RG_NAV_MIN to RG_NAV_MAX cells away (the larger of the
 // two axes), reached within 1 cell. Its perf is cells per step on the way there (0 if it never arrives) over the
 // scripted bot's; its reward is the progress toward the target (adding up to 1 on the way) plus 1
@@ -81,13 +85,18 @@ static const float RG_TASK_REWARD[RG_NTASKS] = {0.005121f, 0.000218f, 0.000428f,
 // plus 1 when it dies, instead of exp; the episode ends then. Its perf is that share (1 for a kill)
 // over the scripted bot's. The goal's difficulty values: the boss's level / 100, whether it is in
 // sight, where (as a monster's slot has it), and the share of its HP left.
+// Travel: like navigation, to a cell on a map of the travel region (client/rathena_atlas.h) 1 to 3
+// warps away, measured in world cells (a map's grid square times RO_ATLAS_SQUARE plus the cell). Its
+// difficulty values: the way there in grid squares (x, y, distance), and whether the target is on this
+// map. The view marks warp portals in sight with 2.
 // The curriculum's prerequisites: the tasks (bits) each task builds on. The class skills and
-// navigation build on field leveling, survival on the Swordman skills, the mini-boss on survival.
+// navigation build on field leveling, survival on the Swordman skills, the mini-boss on survival,
+// travel on navigation.
 static const unsigned RG_TASK_NEEDS[RG_NTASKS] = {0, 1u << RG_TASK_FIELD, 1u << RG_TASK_SWORD_SKILLS,
                                                   1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD,
                                                   1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD,
                                                   1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD,
-                                                  1u << RG_TASK_SURVIVAL};
+                                                  1u << RG_TASK_SURVIVAL, 1u << RG_TASK_NAVIGATION};
 
 // ---- layout v3 -------------------------------------------------------------------------------
 
@@ -197,7 +206,8 @@ typedef struct RgBot {
     int intent, attacking;
     uint32_t target, item;
     uint32_t focus;  // the monster last attacked or targeted by a skill: it stays in slot 0
-    int nav_x, nav_y, nav_d0, nav_d, arrived;  // navigation: target, starting and last distance
+    int nav_x, nav_y, nav_d0, nav_d, arrived;  // navigation and travel: target, starting and last distance
+    int nav_map;                               // travel: the target's map (RO_ATLAS_MAP), else -1
     uint32_t boss;                             // the mini-boss's id, once its message has come
     float boss_hp, boss_level;                 // the share of its HP left (while fought), level / 100
     int boss_hit, boss_killed;
@@ -494,6 +504,44 @@ static void rg_continue(RgBot* b) {
     }
 }
 
+// The travel region (client/rathena_atlas.h): a map's index, a cell's world position, and the number
+// of warps from one map to each other one.
+static int rg_atlas_index(const char* map) {
+    for (int m = 0; m < RO_ATLAS_MAPS; m++)
+        if (strcmp(RO_ATLAS_MAP[m].name, map) == 0) return m;
+    return -1;
+}
+
+static void rg_world_pos(int m, int x, int y, int* wx, int* wy) {
+    *wx = RO_ATLAS_MAP[m].gx * RO_ATLAS_SQUARE + x;
+    *wy = RO_ATLAS_MAP[m].gy * RO_ATLAS_SQUARE + y;
+}
+
+static void rg_atlas_hops(int from, int* hops) {
+    int queue[RO_ATLAS_MAPS], head = 0, tail = 0;
+    for (int m = 0; m < RO_ATLAS_MAPS; m++) hops[m] = -1;
+    hops[from] = 0;
+    queue[tail++] = from;
+    while (head < tail) {
+        int m = queue[head++];
+        for (int w = 0; w < RO_ATLAS_WARPS; w++)
+            if (RO_ATLAS_WARP[w].from == m && hops[RO_ATLAS_WARP[w].to] < 0) {
+                hops[RO_ATLAS_WARP[w].to] = hops[m] + 1;
+                queue[tail++] = RO_ATLAS_WARP[w].to;
+            }
+    }
+}
+
+// The bot's world position and its distance to the travel target; -1 off the region.
+static int rg_travel_dist(RgBot* b, int* wx, int* wy) {
+    int m = rg_atlas_index(b->c.map), x, y, tx, ty;
+    if (m < 0 || b->nav_map < 0) return -1;
+    ro_self_pos(&b->c, &x, &y);
+    rg_world_pos(m, x, y, wx, wy);
+    rg_world_pos(b->nav_map, b->nav_x, b->nav_y, &tx, &ty);
+    return rg_dist(*wx, *wy, tx, ty);
+}
+
 static void rg_observe(Env* env, int i) {
     RgBot* b = &env->bots[i];
     RoClient* c = &b->c;
@@ -514,6 +562,17 @@ static void rg_observe(Env* env, int i) {
         g[0] = (b->nav_x - x) / RG_NAV_UNIT;
         g[1] = (b->nav_y - y) / RG_NAV_UNIT;
         g[2] = rg_dist(x, y, b->nav_x, b->nav_y) / RG_NAV_UNIT;
+    }
+    if (b->task == RG_TASK_TRAVEL && c->state == RO_IN_GAME && b->nav_map >= 0) {
+        int wx, wy, tx, ty, d = rg_travel_dist(b, &wx, &wy);
+        float* g = o + RG_OBS_GOAL + RG_TASKS_MAX;
+        if (d >= 0) {
+            rg_world_pos(b->nav_map, b->nav_x, b->nav_y, &tx, &ty);
+            g[0] = (float)(tx - wx) / RO_ATLAS_SQUARE;
+            g[1] = (float)(ty - wy) / RO_ATLAS_SQUARE;
+            g[2] = (float)d / RO_ATLAS_SQUARE;
+            g[3] = rg_atlas_index(c->map) == b->nav_map;
+        }
     }
     if (b->task == RG_TASK_BOSS && c->state == RO_IN_GAME) {
         float* g = o + RG_OBS_GOAL + RG_TASKS_MAX;
@@ -561,6 +620,12 @@ static void rg_observe(Env* env, int i) {
         int seen = 0;
         for (int u = 0; u < c->nunits; u++) seen += c->units[u].type == RO_OBJ_MOB;
         s[18] = seen / 8.0f;
+        int square = rg_atlas_index(c->map);  // where in the travel region, if there
+        if (square >= 0) {
+            s[19] = 1;
+            s[20] = RO_ATLAS_MAP[square].gx / 4.0f;
+            s[21] = RO_ATLAS_MAP[square].gy / 4.0f;
+        }
         // Effects on the bot: status icons with the share of their time left, then ailments.
         float* e = o + RG_OBS_EFFECTS;
         for (int i = 0; i < RG_EFFECT_ICONS; i++) {
@@ -579,6 +644,12 @@ static void rg_observe(Env* env, int i) {
         for (int dy = 0; dy < RG_VIEW; dy++)
             for (int dx = 0; dx < RG_VIEW; dx++)
                 view[dx + dy * RG_VIEW] = ro_walkable(c->cells, x + dx - RG_VIEW / 2, y + dy - RG_VIEW / 2);
+        for (int u = 0; u < c->nunits; u++) {  // warp portals: 2
+            const RoUnit* w = &c->units[u];
+            if ((w->type != RO_OBJ_NPC && w->type != RO_OBJ_EVT_NPC) || w->cls != 45) continue;
+            int wx = w->x1 - x + RG_VIEW / 2, wy = w->y1 - y + RG_VIEW / 2;
+            if (wx >= 0 && wy >= 0 && wx < RG_VIEW && wy < RG_VIEW) view[wx + wy * RG_VIEW] = 2;
+        }
         for (int sk = 0; sk < RG_NSKILLS; sk++) {
             const RoSkill* s2 = RG_SKILLS[sk] ? ro_skill_find(c, RG_SKILLS[sk]) : NULL;
             if (!s2) continue;
@@ -716,6 +787,32 @@ static float rg_boss_step(RgBot* b) {
     return r;
 }
 
+// Travel's target: a map 1 to 3 warps away (a random number of warps that some map is at), and a
+// random walkable cell on it.
+static void rg_travel_target(Env* env, RgBot* b) {
+    RoClient* c = &b->c;
+    int from = rg_atlas_index(c->map), hops[RO_ATLAS_MAPS], far = 0;
+    b->nav_map = -1;
+    b->nav_d0 = b->nav_d = 0;
+    if (from < 0) return;
+    rg_atlas_hops(from, hops);
+    for (int m = 0; m < RO_ATLAS_MAPS; m++) far = hops[m] > far ? hops[m] : far;
+    if (far == 0) return;
+    int want = 1 + rand_r(&env->seed) % (far < 3 ? far : 3), count = 0, pick;
+    for (int m = 0; m < RO_ATLAS_MAPS; m++) count += hops[m] == want;
+    pick = rand_r(&env->seed) % count;
+    for (int m = 0; m < RO_ATLAS_MAPS; m++)
+        if (hops[m] == want && pick-- == 0) b->nav_map = m;
+    const RoMap* cells = ro_map_get(c->db_dir, RO_ATLAS_MAP[b->nav_map].name);
+    for (int tries = 0; tries < 500; tries++) {
+        b->nav_x = rand_r(&env->seed) % RO_ATLAS_MAP[b->nav_map].xs;
+        b->nav_y = rand_r(&env->seed) % RO_ATLAS_MAP[b->nav_map].ys;
+        if (!cells || ro_walkable(cells, b->nav_x, b->nav_y)) break;
+    }
+    int wx, wy;
+    b->nav_d0 = b->nav_d = rg_travel_dist(b, &wx, &wy);
+}
+
 // Navigation's target: a breadth-first search over walkable cells finds what the bot can walk to
 // within RG_NAV_MAX cells (a diagonal step needs both cells beside it free, as in rAthena's paths);
 // then a random distance from RG_NAV_MIN to RG_NAV_MAX that has such cells, and a random one of
@@ -799,7 +896,9 @@ static void rg_begin_episode(Env* env, RgBot* b) {
     b->boss_hp = 1;
     b->boss_level = 0;
     b->boss_hit = b->boss_killed = 0;
+    b->nav_map = -1;
     if (b->task == RG_TASK_NAVIGATION) rg_nav_target(env, b);
+    if (b->task == RG_TASK_TRAVEL) rg_travel_target(env, b);
     if (b->task == RG_TASK_BOSS) rg_boss_find(b);
 }
 
@@ -823,7 +922,7 @@ static void rg_end_episode(Env* env, RgBot* b) {
     RoClient* c = &b->c;
     float exp_per_step = b->steps > 0 ? (float)(ro_total_base_exp(c) - b->base0) / b->steps : 0;
     float perf = exp_per_step / RG_TASK_BASELINE[b->task];
-    if (b->task == RG_TASK_NAVIGATION)
+    if (b->task == RG_TASK_NAVIGATION || b->task == RG_TASK_TRAVEL)
         perf = b->arrived && b->steps > 0 ? (float)b->nav_d0 / b->steps / RG_TASK_BASELINE[b->task] : 0;
     if (b->task == RG_TASK_BOSS) perf = (b->boss_hit ? 1 - b->boss_hp : 0) / RG_TASK_BASELINE[b->task];
     env->log.perf += perf;
@@ -1023,6 +1122,17 @@ void puf_step(Env* env) {
                     if (b->nav_d0 > 0 && d <= 1) {
                         r += 1;
                         b->arrived = 1;
+                    }
+                } else if (b->task == RG_TASK_TRAVEL) {
+                    // Progress toward the target in world cells and 1 on arrival, instead of exp.
+                    int wx, wy, d = rg_travel_dist(b, &wx, &wy);
+                    if (d >= 0) {
+                        if (b->nav_d0 > 0) r += (float)(b->nav_d - d) / b->nav_d0;
+                        b->nav_d = d;
+                        if (b->nav_d0 > 0 && d <= 1 && rg_atlas_index(c->map) == b->nav_map) {
+                            r += 1;
+                            b->arrived = 1;
+                        }
                     }
                 } else if (b->task == RG_TASK_BOSS) {
                     r += rg_boss_step(b);

@@ -20,7 +20,10 @@
 //   Merchant  Mammonite the target next to the bot
 //   Thief     Envenom the target next to the bot
 // In the navigation task it only walks: every 3 steps, or when it has stopped, toward the cell of its
-// 15x15 view that it can reach and that is nearest the target, else in a random direction.
+// 15x15 view that it can reach and that is nearest the target, else in a random direction. In the
+// travel task it reads the region from client/rathena_atlas.h and the maps from RO_DB_DIR (the policy
+// has only the compass and the portals in its view): it walks the shortest path, by a breadth-first
+// search over the whole map, to the next warp toward the target's map, then to the target.
 #define RG_HEADLESS
 #include "ragnarok.h"
 
@@ -30,10 +33,53 @@ static int skill_index(int id) {
     return -1;
 }
 
-// A scripted bot's memory: its heading while walking on.
+// A scripted bot's memory: its heading while walking on, and for travel, the distance of every cell of
+// a map to its current goal (-1 where unreachable).
 typedef struct {
     int heading;
+    int map, goal_x, goal_y;
+    int16_t* dist;
 } Script;
+
+// The steps from every cell of the map to (gx, gy), by a breadth-first search over walkable cells (a
+// diagonal step needs both cells beside it free); kept until the goal changes.
+static void plan(Script* st, const RoMap* cells, int map, int gx, int gy) {
+    if (st->dist && st->map == map && st->goal_x == gx && st->goal_y == gy) return;
+    int n = cells->xs * cells->ys, head = 0, tail = 0;
+    int* queue = (int*)malloc(n * sizeof(int));
+    st->dist = (int16_t*)realloc(st->dist, n * sizeof(int16_t));
+    for (int k = 0; k < n; k++) st->dist[k] = -1;
+    st->map = map, st->goal_x = gx, st->goal_y = gy;
+    if (gx < 0 || gy < 0 || gx >= cells->xs || gy >= cells->ys) {
+        free(queue);
+        return;
+    }
+    st->dist[gx + gy * cells->xs] = 0;
+    queue[tail++] = gx + gy * cells->xs;
+    while (head < tail) {
+        int k = queue[head++], kx = k % cells->xs, ky = k / cells->xs;
+        for (int dir = 0; dir < 8; dir++) {
+            int nx = kx + RG_DX[dir], ny = ky + RG_DY[dir];
+            if (!ro_walkable(cells, nx, ny) || st->dist[nx + ny * cells->xs] >= 0) continue;
+            if (RG_DX[dir] && RG_DY[dir] && !(ro_walkable(cells, nx, ky) && ro_walkable(cells, kx, ny))) continue;
+            st->dist[nx + ny * cells->xs] = st->dist[k] + 1;
+            queue[tail++] = nx + ny * cells->xs;
+        }
+    }
+    free(queue);
+}
+
+// The direction to the neighbor cell nearest the goal, or -1.
+static int plan_dir(const Script* st, const RoMap* cells, int x, int y) {
+    int best = -1, best_d = ro_walkable(cells, x, y) && st->dist[x + y * cells->xs] >= 0 ? st->dist[x + y * cells->xs] : 1 << 30;
+    for (int dir = 0; dir < 8; dir++) {
+        int nx = x + RG_DX[dir], ny = y + RG_DY[dir];
+        if (!ro_walkable(cells, nx, ny)) continue;
+        int d = st->dist[nx + ny * cells->xs];
+        if (d >= 0 && d < best_d) best_d = d, best = dir;
+    }
+    return best;
+}
 
 static int job_of(const float* goal) {
     for (int j = 0; j < 8; j++)
@@ -66,14 +112,12 @@ static int mage_bolt(const float* mob) {
     return skill_index(19);
 }
 
-// Navigation's next direction: of the cells in the view that the bot can reach through walkable
-// cells, the one nearest the target (fewest steps among equals), by the first step of its path; -1
-// if no cell in view is nearer than where the bot stands.
-static int nav_dir(const float* o) {
-    const float* g = o + RG_OBS_GOAL + RG_TASKS_MAX;
+// The next direction toward a target (tx, ty) cells away: of the cells in the view that the bot can
+// reach through walkable cells, the one nearest the target (fewest steps among equals), by the first
+// step of its path; -1 if no cell in view is nearer than where the bot stands.
+static int nav_dir(const float* o, int tx, int ty) {
     const float* view = o + RG_OBS_VIEW;
     enum { N = RG_VIEW * RG_VIEW, C = RG_VIEW / 2, CENTER = C + C * RG_VIEW };
-    int tx = (int)lroundf(g[0] * RG_NAV_UNIT), ty = (int)lroundf(g[1] * RG_NAV_UNIT);
     int prev[N], queue[N], head = 0, tail = 0, best = CENTER, best_d = rg_dist(0, 0, tx, ty);
     for (int k = 0; k < N; k++) prev[k] = -1;
     prev[CENTER] = CENTER;
@@ -96,6 +140,43 @@ static int nav_dir(const float* o) {
     return -1;
 }
 
+static int floor_div(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+// Travel's next direction: along the shortest path to the target on its map, else to the nearest
+// warp that leads a map closer to it; -1 off the travel region.
+static int travel_dir(const float* o, Script* st) {
+    const float* self = o + RG_OBS_SELF;
+    const float* g = o + RG_OBS_GOAL + RG_TASKS_MAX;
+    int m = -1, t = -1;
+    for (int k = 0; self[19] > 0 && k < RO_ATLAS_MAPS; k++)
+        if (RO_ATLAS_MAP[k].gx == lroundf(self[20] * 4) && RO_ATLAS_MAP[k].gy == lroundf(self[21] * 4)) m = k;
+    if (m < 0) return -1;
+    int x = lroundf(self[16] * RO_ATLAS_MAP[m].xs), y = lroundf(self[17] * RO_ATLAS_MAP[m].ys);
+    int dx = lroundf(g[0] * RO_ATLAS_SQUARE), dy = lroundf(g[1] * RO_ATLAS_SQUARE);
+    const RoMap* cells = ro_map_get(getenv("RO_DB_DIR"), RO_ATLAS_MAP[m].name);
+    if (!cells) return -1;
+    if (g[3] > 0) {
+        plan(st, cells, m, x + dx, y + dy);
+        return plan_dir(st, cells, x, y);
+    }
+    int wx = RO_ATLAS_MAP[m].gx * RO_ATLAS_SQUARE + x + dx, wy = RO_ATLAS_MAP[m].gy * RO_ATLAS_SQUARE + y + dy;
+    for (int k = 0; k < RO_ATLAS_MAPS; k++)
+        if (RO_ATLAS_MAP[k].gx == floor_div(wx, RO_ATLAS_SQUARE) && RO_ATLAS_MAP[k].gy == floor_div(wy, RO_ATLAS_SQUARE))
+            t = k;
+    if (t < 0) return -1;
+    int hops[RO_ATLAS_MAPS], best = -1, best_d = 1 << 30;
+    rg_atlas_hops(t, hops);  // the warps go both ways
+    for (int w = 0; w < RO_ATLAS_WARPS; w++) {
+        const RoAtlasWarp* p = &RO_ATLAS_WARP[w];
+        if (p->from != m || hops[p->to] < 0 || hops[p->to] >= hops[m]) continue;
+        int d = rg_dist(x, y, p->x, p->y);
+        if (d < best_d) best_d = d, best = w;
+    }
+    if (best < 0) return -1;
+    plan(st, cells, m, RO_ATLAS_WARP[best].x, RO_ATLAS_WARP[best].y);
+    return plan_dir(st, cells, x, y);
+}
+
 static void scripted(const float* o, float* a, Script* st, long now) {
     const float* goal = o + RG_OBS_GOAL;
     const float* self = o + RG_OBS_SELF;
@@ -112,11 +193,13 @@ static void scripted(const float* o, float* a, Script* st, long now) {
         if (f[0] > 0 && f[5] > 0) hitting++;
     }
     a[0] = RG_WAIT; a[1] = 0; a[2] = 0; a[3] = 0;
-    if (goal[RG_TASK_NAVIGATION] > 0) {
+    if (goal[RG_TASK_NAVIGATION] > 0 || goal[RG_TASK_TRAVEL] > 0) {
+        const float* g = goal + RG_TASKS_MAX;
         if (hp < 0.4f && self[9] > 0) {
             a[0] = RG_POTION;
         } else if (!self[10] || now % 3 == 0) {
-            int dir = nav_dir(o);
+            int dir = goal[RG_TASK_TRAVEL] > 0 ? travel_dir(o, st)
+                                               : nav_dir(o, lroundf(g[0] * RG_NAV_UNIT), lroundf(g[1] * RG_NAV_UNIT));
             if (dir < 0) {
                 if (rand() % 5 == 0) st->heading = rand() % 8;
                 dir = st->heading;
@@ -188,7 +271,9 @@ int main(int argc, char** argv) {
     Dict kw = {0};
     dict_set(&kw, "num_agents", n);
     dict_set(&kw, "lockstep", 1);
-    dict_set(&kw, "episode_steps", 1200);
+    // Episodes of 1,200 world steps (EPISODE_STEPS to change it), shorter than training's 3,000 so
+    // that a short run ends many of them.
+    dict_set(&kw, "episode_steps", getenv("EPISODE_STEPS") ? atoi(getenv("EPISODE_STEPS")) : 1200);
     dict_set(&kw, "action_repeat", repeat);
     dict_set(&kw, "reward_scale", 1.0);
     dict_set(&kw, "reward_job", 0.5);

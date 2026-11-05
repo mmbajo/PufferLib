@@ -40,7 +40,7 @@ CHECK=$RG/ragnarok_check
 export RG_DEBUG=1
 status=0
 $CHECK $NBOTS $STEPS random mix $REPEAT || status=1
-for task in ${TASKS:-0 1 2 3 4 5 6 7 8 9}; do
+for task in ${TASKS:-0 1 2 3 4 5 6 7 8 9 10}; do
     $CHECK $NBOTS $((STEPS * 10)) scripted $task $REPEAT || status=1
 done
 wlog "env checks exited with $status"
