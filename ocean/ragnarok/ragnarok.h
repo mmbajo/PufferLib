@@ -35,7 +35,11 @@
 #include <sys/file.h>
 
 #include "client/rathena_client.h"
+#ifdef RO_MOBS_H
+#include RO_MOBS_H
+#else
 #include "client/rathena_mobs.h"
+#endif
 
 typedef float obs_t;
 #include "pufferenv.h"
