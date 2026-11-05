@@ -18,9 +18,10 @@
 // `@rlreset <task>` (server/npc/rl_train.txt) sets its character up for it. The observation starts
 // with a goal vector (the task, its difficulty, the job), so one model learns every task and can be
 // told which to do. Reward: reward_scale x (base exp gained / exp the level needs + reward_job x the
-// same for job exp + reward_death on death), scaled by the task's baseline reward rate so that every
-// task pays the same at its scripted bot's level. perf is exp per step over the scripted bot's
-// (1.0 = as good as it), logged per task.
+// same for job exp, scaled by the task's baseline reward rate so that every task pays the same at
+// its scripted bot's level, + reward_death on death). perf is exp per step over the scripted bot's
+// (1.0 = as good as it), logged per task. Navigation pays and scores the way to its target instead
+// (see RG_NAV_MIN).
 //
 // Layout v2 is fixed (changing it invalidates checkpoints), so it has spare room; see the RG_OBS_*
 // offsets. Actions: verb, direction (for move), slot (a monster or item slot, for attack, pick up and
@@ -43,24 +44,33 @@ typedef float obs_t;
 
 #define RG_TASKS_MAX 16  // goal one-hot width, with room for later tasks
 // Field leveling (a Novice), the first classes' skills (each at levels 25/25, on a field for its
-// level) and survival (a weak Swordman among wolves); server/npc/rl_train.txt sets each one up.
+// level), survival (a weak Swordman among wolves) and navigation (a Novice walking to a target cell);
+// server/npc/rl_train.txt sets each one up.
 enum {
     RG_TASK_FIELD, RG_TASK_SWORD_SKILLS, RG_TASK_SURVIVAL, RG_TASK_MAGE_SKILLS, RG_TASK_ARCHER_SKILLS,
-    RG_TASK_ACOLYTE_SKILLS, RG_TASK_THIEF_SKILLS, RG_TASK_MERCHANT_SKILLS, RG_NTASKS
+    RG_TASK_ACOLYTE_SKILLS, RG_TASK_THIEF_SKILLS, RG_TASK_MERCHANT_SKILLS, RG_TASK_NAVIGATION, RG_NTASKS
 };
-static const char* RG_TASK_NAMES[RG_NTASKS] = {"field",       "sword_skills", "survival",
+static const char* RG_TASK_NAMES[RG_NTASKS] = {"field",       "sword_skills",  "survival",
                                                "mage_skills", "archer_skills", "acolyte_skills",
-                                               "thief_skills", "merchant_skills"};
+                                               "thief_skills", "merchant_skills", "navigation"};
 // Each task's scripted policy (ragnarok_check, 64 bots): its base exp per step, against which perf
 // is measured, and the exp part of its reward per step (level-normalized exp, reward_scale 1), by
 // which the exp reward is normalized so that every task pays the same there; a death costs the same
-// everywhere. Job 5006800 (12,000 steps per task) measured all of them; the first three baselines
-// stay at job 5005277's values, so their perf reads as it did in the G0 and G1 runs (the Swordman
-// skills bot measured 0.381 there, 9% below 0.419).
+// everywhere. Jobs 5006800 and 5006820 (navigation; 12,000 steps per task) measured all of them; the
+// first three baselines stay at job 5005277's values, so their perf reads as it did in the G0 and
+// G1 runs (the Swordman skills bot measured 0.381 there, 9% below 0.419).
 static const float RG_TASK_BASELINE[RG_NTASKS] = {0.0312f, 0.419f, 1.19f, 0.648f,
-                                                  1.344f,  0.269f, 1.588f, 1.053f};
+                                                  1.344f,  0.269f, 1.588f, 1.053f, 0.386f};
 static const float RG_TASK_REWARD[RG_NTASKS] = {0.002628f, 0.000154f, 0.001082f, 0.000238f,
-                                                0.000484f, 0.000109f, 0.000562f, 0.000390f};
+                                                0.000484f, 0.000109f, 0.000562f, 0.000390f, 0.004902f};
+// Navigation: a walkable target RG_NAV_MIN to RG_NAV_MAX cells away (the larger of the two axes),
+// reached within 1 cell. Its perf is cells per step on the way there (0 if it never arrives) over the
+// scripted bot's; its reward is the progress toward the target (adding up to 1 on the way) plus 1
+// on arrival, instead of exp. The goal's difficulty values hold the way there: target minus
+// position in x and y, and the distance, in units of RG_NAV_UNIT cells.
+#define RG_NAV_MIN 10
+#define RG_NAV_MAX 120
+#define RG_NAV_UNIT 100.0f
 
 // ---- layout v2 -------------------------------------------------------------------------------
 
@@ -150,6 +160,7 @@ typedef struct RgBot {
     int intent, attacking;
     uint32_t target, item;
     uint32_t focus;  // the monster last attacked or targeted by a skill: it stays in slot 0
+    int nav_x, nav_y, nav_d0, nav_d, arrived;  // navigation: target, starting and last distance
     double intent_since, last_attack, last_pickup;
     uint32_t slot_mob[RG_MOBS], slot_item[RG_ITEMS];
     int64_t base_seen, job_seen;  // cumulative exp at the end of the last step
@@ -368,9 +379,18 @@ static void rg_observe(Env* env, int i) {
     memset(b->slot_mob, 0, sizeof b->slot_mob);
     memset(b->slot_item, 0, sizeof b->slot_item);
 
-    // Goal: the task one-hot, its difficulty (the first tasks have none yet), the job.
+    // Goal: the task one-hot, its difficulty (navigation's way to the target; the other tasks have
+    // none yet), the job.
     o[RG_OBS_GOAL + b->task] = 1;
     o[RG_OBS_GOAL + RG_TASKS_MAX + 4 + rg_job_slot(c->job)] = 1;
+    if (b->task == RG_TASK_NAVIGATION && c->state == RO_IN_GAME) {
+        int x, y;
+        ro_self_pos(c, &x, &y);
+        float* g = o + RG_OBS_GOAL + RG_TASKS_MAX;
+        g[0] = (b->nav_x - x) / RG_NAV_UNIT;
+        g[1] = (b->nav_y - y) / RG_NAV_UNIT;
+        g[2] = rg_dist(x, y, b->nav_x, b->nav_y) / RG_NAV_UNIT;
+    }
 
     const RoInv* potion = NULL;
     if (c->state == RO_IN_GAME) {
@@ -513,8 +533,29 @@ static void rg_observe(Env* env, int i) {
     }
 }
 
+// Navigation's target: a walkable cell at a random distance, on the square ring of that distance
+// around the bot (else where the bot stands).
+static void rg_nav_target(Env* env, RgBot* b) {
+    RoClient* c = &b->c;
+    int x, y;
+    ro_self_pos(c, &x, &y);
+    b->nav_x = x;
+    b->nav_y = y;
+    for (int tries = 0; c->cells && tries < 200; tries++) {
+        int d = RG_NAV_MIN + rand_r(&env->seed) % (RG_NAV_MAX - RG_NAV_MIN + 1);
+        int side = rand_r(&env->seed) % 4, t = rand_r(&env->seed) % (2 * d + 1) - d;
+        int tx = x + (side == 0 ? d : side == 1 ? -d : t), ty = y + (side == 2 ? d : side == 3 ? -d : t);
+        if (ro_walkable(c->cells, tx, ty)) {
+            b->nav_x = tx;
+            b->nav_y = ty;
+            break;
+        }
+    }
+    b->nav_d0 = b->nav_d = rg_dist(x, y, b->nav_x, b->nav_y);
+}
+
 // Start counting an episode once its @rlreset has landed.
-static void rg_begin_episode(RgBot* b) {
+static void rg_begin_episode(Env* env, RgBot* b) {
     RoClient* c = &b->c;
     b->steps = 0;
     b->ret = 0;
@@ -532,6 +573,8 @@ static void rg_begin_episode(RgBot* b) {
     b->intent = RG_NONE;
     b->attacking = 0;
     b->focus = 0;
+    b->arrived = 0;
+    if (b->task == RG_TASK_NAVIGATION) rg_nav_target(env, b);
 }
 
 // Draw the bot's next task and send its reset; the reset lands during the next step.
@@ -545,7 +588,7 @@ static void rg_start_reset(Env* env, RgBot* b) {
     } else {
         if (b->c.dead) ro_respawn(&b->c);  // a real-time server has no @rlreset
         b->reset_wait = 0;
-        rg_begin_episode(b);
+        rg_begin_episode(env, b);
     }
 }
 
@@ -553,6 +596,8 @@ static void rg_end_episode(Env* env, RgBot* b) {
     RoClient* c = &b->c;
     float exp_per_step = b->steps > 0 ? (float)(ro_total_base_exp(c) - b->base0) / b->steps : 0;
     float perf = exp_per_step / RG_TASK_BASELINE[b->task];
+    if (b->task == RG_TASK_NAVIGATION)
+        perf = b->arrived && b->steps > 0 ? (float)b->nav_d0 / b->steps / RG_TASK_BASELINE[b->task] : 0;
     env->log.perf += perf;
     env->log.score += b->ret;
     env->log.episode_length += b->steps;
@@ -687,7 +732,7 @@ void puf_reset(Env* env) {
     for (int i = 0; i < env->num_agents; i++) {
         RgBot* b = &env->bots[i];
         b->reset_wait = 0;
-        rg_begin_episode(b);
+        rg_begin_episode(env, b);
         rg_observe(env, i);
         env->agents[i].rewards[0] = 0;
         env->agents[i].terminals[0] = 0;
@@ -722,13 +767,26 @@ void puf_step(Env* env) {
             int done = 0;
             if (b->reset_wait) {
                 // The reset is landing: no reward, and the episode starts counting once it has.
-                if (--b->reset_wait == 0) rg_begin_episode(b);
+                if (--b->reset_wait == 0) rg_begin_episode(env, b);
             } else {
                 int64_t base = ro_total_base_exp(c), job = ro_total_job_exp(c);
-                if (c->next_base_exp > 0) r += (float)(base - b->base_seen) / c->next_base_exp;
-                if (c->next_job_exp > 0) r += env->reward_job * (float)(job - b->job_seen) / c->next_job_exp;
-                // Exp is scaled per task so every task pays the same at its baseline; a death costs the
-                // same everywhere.
+                int x, y;
+                ro_self_pos(c, &x, &y);
+                if (b->task == RG_TASK_NAVIGATION) {
+                    // Progress toward the target and 1 on arrival, instead of exp.
+                    int d = rg_dist(x, y, b->nav_x, b->nav_y);
+                    if (b->nav_d0 > 0) r += (float)(b->nav_d - d) / b->nav_d0;
+                    b->nav_d = d;
+                    if (d <= 1) {
+                        r += 1;
+                        b->arrived = 1;
+                    }
+                } else {
+                    if (c->next_base_exp > 0) r += (float)(base - b->base_seen) / c->next_base_exp;
+                    if (c->next_job_exp > 0) r += env->reward_job * (float)(job - b->job_seen) / c->next_job_exp;
+                }
+                // Scaled per task so every task pays the same at its baseline; a death costs the same
+                // everywhere.
                 r *= RG_TASK_REWARD[RG_TASK_FIELD] / RG_TASK_REWARD[b->task];
                 int died = c->deaths > b->deaths_seen;
                 if (died) r += env->reward_death;
@@ -738,8 +796,7 @@ void puf_step(Env* env) {
                 b->deaths_seen = c->deaths;
                 b->ret += r;
                 b->steps++;
-                int x, y, seen = 0, players = 0;
-                ro_self_pos(c, &x, &y);
+                int seen = 0, players = 0;
                 for (int u = 0; u < c->nunits; u++) {
                     seen += c->units[u].type == RO_OBJ_MOB;
                     players += c->units[u].type == RO_OBJ_PC && c->units[u].id != c->aid;
@@ -755,7 +812,7 @@ void puf_step(Env* env) {
                     int ey = y < c->cells->ys - 1 - y ? y : c->cells->ys - 1 - y;
                     b->edge += 2.0f * (ex < ey ? ex : ey) / (c->cells->xs < c->cells->ys ? c->cells->xs : c->cells->ys);
                 }
-                done = died || (env->episode_steps > 0 && b->steps >= env->episode_steps);
+                done = died || b->arrived || (env->episode_steps > 0 && b->steps >= env->episode_steps);
             }
             env->agents[i].rewards[0] += r;
             if (done) {

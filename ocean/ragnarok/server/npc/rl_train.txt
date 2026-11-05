@@ -21,6 +21,7 @@
 //   7  Merchant skills: Merchant, levels 25/25, STR 50 VIT 35 DEX 30 AGI 15, Mammonite 10 and
 //      200,000 zeny to pay for it, Enlarge Weight Limit 5, Discount 3, Overcharge 3, Axe, Padded
 //      Armor; mjolnir_01
+//   8  navigation: the field leveling Novice; the env picks the cell to walk to
 // Each gets 30 Red Potions (survival 10). $@rl_maps$ lists every task's map for the other training
 // scripts (rl_spread.txt, rl_census.txt); RG_TASK_MAPS in slurm/world.sh is the same list.
 -	script	rl_train	-1,{
@@ -91,6 +92,7 @@ OnReset:
 		setarray .@gear[0], 1301, 2312;
 		.@map$ = "mjolnir_01";
 		break;
+	case 8:
 	default:
 		.@job = Job_Novice;
 		.@level = 1;

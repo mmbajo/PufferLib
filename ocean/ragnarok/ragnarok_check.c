@@ -18,6 +18,8 @@
 //   Acolyte   Heal itself below 50% HP; Blessing and Increase AGI every 2 minutes
 //   Merchant  Mammonite the target next to the bot
 //   Thief     Envenom the target next to the bot
+// In the navigation task it only walks: every 3 steps, or when it has stopped, toward the cell of its
+// 15x15 view that it can reach and that is nearest the target, else in a random direction.
 #define RG_HEADLESS
 #include "ragnarok.h"
 
@@ -65,6 +67,36 @@ static int mage_bolt(const float* mob) {
     return skill_index(19);
 }
 
+// Navigation's next direction: of the cells in the view that the bot can reach through walkable
+// cells, the one nearest the target (fewest steps among equals), by the first step of its path; -1
+// if no cell in view is nearer than where the bot stands.
+static int nav_dir(const float* o) {
+    const float* g = o + RG_OBS_GOAL + RG_TASKS_MAX;
+    const float* view = o + RG_OBS_VIEW;
+    enum { N = RG_VIEW * RG_VIEW, C = RG_VIEW / 2, CENTER = C + C * RG_VIEW };
+    int tx = (int)lroundf(g[0] * RG_NAV_UNIT), ty = (int)lroundf(g[1] * RG_NAV_UNIT);
+    int prev[N], queue[N], head = 0, tail = 0, best = CENTER, best_d = rg_dist(0, 0, tx, ty);
+    for (int k = 0; k < N; k++) prev[k] = -1;
+    prev[CENTER] = CENTER;
+    queue[tail++] = CENTER;
+    while (head < tail) {
+        int k = queue[head++], kx = k % RG_VIEW, ky = k / RG_VIEW;
+        int d = rg_dist(kx - C, ky - C, tx, ty);
+        if (d < best_d) best_d = d, best = k;
+        for (int dir = 0; dir < 8; dir++) {
+            int nx = kx + RG_DX[dir], ny = ky + RG_DY[dir], n = nx + ny * RG_VIEW;
+            if (nx < 0 || ny < 0 || nx >= RG_VIEW || ny >= RG_VIEW || prev[n] >= 0 || view[n] <= 0) continue;
+            prev[n] = k;
+            queue[tail++] = n;
+        }
+    }
+    if (best == CENTER) return -1;
+    while (prev[best] != CENTER) best = prev[best];
+    for (int dir = 0; dir < 8; dir++)
+        if (best == CENTER + RG_DX[dir] + RG_DY[dir] * RG_VIEW) return dir;
+    return -1;
+}
+
 static void scripted(const float* o, float* a, Script* st, long now) {
     const float* goal = o + RG_OBS_GOAL;
     const float* self = o + RG_OBS_SELF;
@@ -81,6 +113,19 @@ static void scripted(const float* o, float* a, Script* st, long now) {
         if (f[0] > 0 && f[5] > 0) hitting++;
     }
     a[0] = RG_WAIT; a[1] = 0; a[2] = 0; a[3] = 0;
+    if (goal[RG_TASK_NAVIGATION] > 0) {
+        if (hp < 0.4f && self[9] > 0) {
+            a[0] = RG_POTION;
+        } else if (!self[10] || now % 3 == 0) {
+            int dir = nav_dir(o);
+            if (dir < 0) {
+                if (rand() % 5 == 0) st->heading = rand() % 8;
+                dir = st->heading;
+            }
+            a[0] = RG_MOVE; a[1] = dir;
+        }
+        return;
+    }
     // The job's skill for this step, on slot 0 (the focus, else the nearest monster), or -1.
     int skill = -1;
     if (job == 1) {
