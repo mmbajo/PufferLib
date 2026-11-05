@@ -29,7 +29,7 @@ TIMESTEPS=${3:-400000000}
 RUNS_FILE=${4:-}
 node=$(hostname -s)
 job=$SLURM_JOB_ID
-export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-re}  # or ~/ragnarok/rathena-train (pre-renewal)
+export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-2025}  # client 20250402, as the play server; rathena-re is 20221005, rathena-train pre-renewal
 export WORLD_LEAN=1
 export WORLD_MAP_CONF=$'lockstep: yes\nautosave_time: 3600'
 # Ports and the database port per job, so two training jobs can share a node.

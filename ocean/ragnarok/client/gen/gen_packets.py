@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-RA = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "ragnarok/rathena-re")
+RA = Path(sys.argv[1] if len(sys.argv) > 1 else Path.home() / "ragnarok/rathena-2025")
 
 
 def build_settings(ra):

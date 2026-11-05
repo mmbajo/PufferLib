@@ -1,8 +1,8 @@
 // rathena_client.h: a small Ragnarok Online client for rAthena, written for bots.
 //
 // Speaks the client version and rules rathena_packets.h was generated for (gen/gen_packets.py, from
-// rAthena's own source), with packet obfuscation off: 20130618 pre-renewal and 20221005 renewal are
-// tested. Packet ids, lengths and layouts all come from that header, so another version needs only a
+// rAthena's own source), with packet obfuscation off: 20130618 pre-renewal, and 20221005 and 20250402
+// renewal are tested. Packet ids, lengths and layouts all come from that header, so another version needs only a
 // regenerated header (RO_PACKETS_H picks one other than the default). Header-only: every function is
 // static. Link with -lz (zlib, for the map cache).
 //
