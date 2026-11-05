@@ -5,11 +5,19 @@
 //   world steps (100 ms each); the policy decides every ACTION_REPEAT of them (default 1).
 // Needs a lockstep world (see slurm/env-check.sbatch) and RO_WORLD_ROOT, RO_DB_DIR.
 //
-// The scripted policy uses only the env's actions: drink a potion below 40% HP; for Swordman
-// tasks, Bash the target when it is next to the bot and Magnum Break when 3 monsters are close;
-// in the survival task, also back away when hurt and ganged up on, and sit to rest when safe;
-// otherwise keep attacking, else attack the nearest monster, else pick up the nearest item, else
-// walk on.
+// The scripted policy uses only the env's actions. Every job: drink a potion below 40% HP; keep
+// attacking, else attack the nearest monster, else pick up the nearest item, else walk on. On top:
+//   Swordman  Bash the target when it is next to the bot, Magnum Break when 3 monsters are close;
+//             in the survival task, also back away when hurt and ganged up on, and sit to rest
+//             when safe
+//   Mage      never melee: walk to within 8 cells of the nearest monster and cast the bolt its
+//             element is weakest to (Fire Bolt on earth and undead, Cold Bolt on fire, Lightning
+//             Bolt on water, Soul Strike on ghosts, else Fire Bolt); when hit or the monster is
+//             close, the quick Soul Strike or Napalm Beat; sit when SP runs low
+//   Archer    Double Strafe the target within 9 cells, Arrow Shower when 3 monsters are close
+//   Acolyte   Heal itself below 50% HP; Blessing and Increase AGI every 2 minutes
+//   Merchant  Mammonite the target next to the bot
+//   Thief     Envenom the target next to the bot
 #define RG_HEADLESS
 #include "ragnarok.h"
 
@@ -19,50 +27,110 @@ static int skill_index(int id) {
     return -1;
 }
 
-static void scripted(const float* o, float* a, int* heading) {
+// A scripted bot's memory: its heading while walking on, and when it last cast each buff, in world
+// steps.
+typedef struct {
+    int heading;
+    long blessed_at, agi_at;
+} Script;
+
+static int job_of(const float* goal) {
+    for (int j = 0; j < 8; j++)
+        if (goal[RG_TASKS_MAX + 4 + j] > 0) return j;
+    return 0;
+}
+
+static int ready(const float* skills, int k) { return k >= 0 && skills[k * RG_SKILL_F + 4] > 0; }
+
+// The direction closest to (dx, dy).
+static int toward(float dx, float dy) {
+    int best = 0;
+    float best_dot = -1e9f;
+    for (int d = 0; d < 8; d++) {
+        float dot = dx * RG_DX[d] + dy * RG_DY[d];
+        if (dot > best_dot) best_dot = dot, best = d;
+    }
+    return best;
+}
+
+// The bolt a monster's element is weakest to (rAthena's elements: 1 water, 2 earth, 3 fire, 8
+// ghost, 9 undead).
+static int mage_bolt(const float* mob) {
+    int element = 0;
+    for (int e = 0; e < 10; e++)
+        if (mob[11 + e] > 0) element = e;
+    if (element == 3) return skill_index(14);
+    if (element == 1) return skill_index(20);
+    if (element == 8) return skill_index(13);
+    return skill_index(19);
+}
+
+static void scripted(const float* o, float* a, Script* st, long now) {
     const float* goal = o + RG_OBS_GOAL;
     const float* self = o + RG_OBS_SELF;
+    const float* cast = o + RG_OBS_CAST;
     const float* mobs = o + RG_OBS_MOBS;
     const float* items = o + RG_OBS_ITEMS;
     const float* skills = o + RG_OBS_SKILLS;
-    int survival = goal[RG_TASK_SURVIVAL] > 0, swordman = goal[RG_TASKS_MAX + 4 + 1] > 0;
-    float hp = self[0];
-    int near = 0, hitting = 0;
+    int survival = goal[RG_TASK_SURVIVAL] > 0, job = job_of(goal);
+    float hp = self[0], sp = self[1], dist = mobs[3] * RG_SIGHT;
+    int near = 0, hitting = 0, idle = !self[11] && !self[12];
     for (int m = 0; m < RG_MOBS; m++) {
         const float* f = mobs + m * RG_MOB_F;
         if (f[0] > 0 && f[3] * RG_SIGHT <= 2) near++;
         if (f[0] > 0 && f[5] > 0) hitting++;
     }
-    int bash = skill_index(5), magnum = skill_index(7);
     a[0] = RG_WAIT; a[1] = 0; a[2] = 0; a[3] = 0;
+    // The job's skill for this step, on slot 0 (the focus, else the nearest monster), or -1.
+    int skill = -1;
+    if (job == 1) {
+        int bash = skill_index(5), magnum = skill_index(7);
+        if (near >= 3 && ready(skills, magnum)) skill = magnum;
+        else if (mobs[0] > 0 && dist <= 1.5f && mobs[4] > 0.3f && ready(skills, bash)) skill = bash;
+    } else if (job == 2) {
+        // A hit breaks a cast, so up close the quick ones: Soul Strike, else Napalm Beat.
+        int bolt = mage_bolt(mobs), soul = skill_index(13), napalm = skill_index(11);
+        if (mobs[0] > 0 && (hitting || dist <= 2)) skill = ready(skills, soul) ? soul : ready(skills, napalm) ? napalm : -1;
+        else if (mobs[0] > 0 && dist <= 8 && ready(skills, bolt)) skill = bolt;
+    } else if (job == 3) {
+        int strafe = skill_index(46), shower = skill_index(47);
+        if (near >= 3 && ready(skills, shower)) skill = shower;
+        else if (mobs[0] > 0 && dist <= 9 && ready(skills, strafe)) skill = strafe;
+    } else if (job == 4) {
+        int heal = skill_index(28), bless = skill_index(34), agi = skill_index(29);
+        if (hp < 0.5f && ready(skills, heal)) skill = heal;
+        else if (now - st->blessed_at > 1200 && ready(skills, bless)) skill = bless;
+        else if (now - st->agi_at > 1200 && ready(skills, agi)) skill = agi;
+    } else if (job == 5 || job == 6) {
+        int k = skill_index(job == 5 ? 42 : 52);
+        if (mobs[0] > 0 && dist <= 1.5f && ready(skills, k)) skill = k;
+    }
+
     if (hp < 0.4f && self[9] > 0) {
         a[0] = RG_POTION;
     } else if (survival && hp < 0.4f && hitting >= 2) {
-        // Back away from the nearest attacker.
-        float dx = -mobs[1], dy = -mobs[2];
-        int best = 0;
-        float best_dot = -1e9f;
-        for (int d = 0; d < 8; d++) {
-            float dot = dx * RG_DX[d] + dy * RG_DY[d];
-            if (dot > best_dot) best_dot = dot, best = d;
-        }
-        a[0] = RG_MOVE; a[1] = best;
-    } else if (survival && !hitting && !self[11] && !self[12] && (self[7] ? hp < 0.9f : hp < 0.6f)) {
+        a[0] = RG_MOVE; a[1] = toward(-mobs[1], -mobs[2]);  // back away from the nearest attacker
+    } else if (survival && !hitting && idle && (self[7] ? hp < 0.9f : hp < 0.6f)) {
         if (!self[7]) a[0] = RG_SIT;  // sit down, or stay seated until healed
-    } else if (swordman && magnum >= 0 && near >= 3 && skills[magnum * RG_SKILL_F + 4] > 0) {
-        a[0] = RG_SKILL; a[3] = magnum;
-    } else if (swordman && bash >= 0 && mobs[0] > 0 && mobs[3] * RG_SIGHT <= 1.5f && mobs[4] > 0.3f
-               && skills[bash * RG_SKILL_F + 4] > 0) {
-        a[0] = RG_SKILL; a[2] = 0; a[3] = bash;
+    } else if (job == 2 && !hitting && idle && (self[7] ? sp < 0.9f : sp < 0.25f)) {
+        if (!self[7]) a[0] = RG_SIT;  // a Mage out of SP rests
+    } else if (cast[0] > 0) {
+        a[0] = RG_WAIT;  // moving would break the cast
+    } else if (skill >= 0) {
+        a[0] = RG_SKILL; a[2] = 0; a[3] = skill;
+        if (skill == skill_index(34)) st->blessed_at = now;
+        if (skill == skill_index(29)) st->agi_at = now;
     } else if (self[11]) {
         a[0] = RG_WAIT;  // already attacking
+    } else if (mobs[0] > 0 && job == 2) {
+        if (dist > 8) { a[0] = RG_MOVE; a[1] = toward(mobs[1], mobs[2]); }  // else wait for SP or the delay
     } else if (mobs[0] > 0) {
         a[0] = RG_ATTACK; a[2] = 0;
     } else if (items[0] > 0 && !self[12]) {
         a[0] = RG_PICKUP; a[2] = 0;
     } else if (!self[10] && !self[12]) {
-        if (rand() % 5 == 0) *heading = rand() % 8;
-        a[0] = RG_MOVE; a[1] = *heading;
+        if (rand() % 5 == 0) st->heading = rand() % 8;
+        a[0] = RG_MOVE; a[1] = st->heading;
     }
 }
 
@@ -108,17 +176,21 @@ int main(int argc, char** argv) {
     puf_reset(&env);
     printf("reset in %.1f s\n", (ro_ms() - t) / 1000);
     double ret = 0;
-    int heading[1024] = {0};
+    Script* script = (Script*)calloc(n, sizeof(Script));
+    for (int i = 0; i < n; i++) script[i].blessed_at = script[i].agi_at = -100000;
     long masked_violations = 0;
     t = ro_ms();
     for (int s = 0; s < steps / repeat; s++) {
         for (int i = 0; i < n; i++) {
             float* a = act + i * NUM_ATNS;
-            if (use_script) scripted(obs + (size_t)i * OBS_SIZE, a, &heading[i]);
+            if (use_script) scripted(obs + (size_t)i * OBS_SIZE, a, &script[i], (long)s * repeat);
             else for (int h = 0, sizes[NUM_ATNS] = ACT_SIZES; h < NUM_ATNS; h++) a[h] = rand() % sizes[h];
             // How often the scripted choice breaks the env's own mask (should be never).
             const unsigned char* m = masks + (size_t)i * RG_MASK_SIZE;
-            if (use_script && (!m[(int)a[0]] || !m[RG_VERBS + (int)a[1]])) masked_violations++;
+            int verb = (int)a[0], bad = !m[verb] || !m[RG_VERBS + (int)a[1]];
+            if (verb == RG_ATTACK || verb == RG_PICKUP || verb == RG_SKILL) bad |= !m[RG_VERBS + 8 + (int)a[2]];
+            if (verb == RG_SKILL) bad |= !m[RG_VERBS + 16 + (int)a[3]];
+            if (use_script && bad) masked_violations++;
         }
         puf_step(&env);
         for (int i = 0; i < n; i++) ret += rew[i];
@@ -128,6 +200,13 @@ int main(int argc, char** argv) {
            " per bot-step %.5f\n", use_script ? "scripted" : "random", task, repeat, steps, n, wall,
            steps * (double)n / wall, ret / steps / n);
     Log* l = &env.log;
+    if (l->n > 0 && strcmp(task, "mix")) {
+        // The exp part of the reward, before the task's normalization: RG_TASK_REWARD for this task.
+        int k = atoi(task);
+        double exp_reward = (ret - l->deaths * -1.0) / steps / n * RG_TASK_REWARD[k] / RG_TASK_REWARD[RG_TASK_FIELD];
+        printf("exp reward per bot-step %.6f, base exp per step %.5f (RG_TASK_REWARD and RG_TASK_BASELINE)\n",
+               exp_reward, l->episode_length > 0 ? l->base_exp / l->episode_length : 0);
+    }
     if (l->n > 0) {
         printf("episodes %.0f: perf %.3f, return %.3f, length %.0f, base lv %.2f, job lv %.2f, kills %.1f, deaths %.2f,"
                " potions %.1f, picked %.1f, skills %.1f, base exp %.1f (%.5f per step), monsters in sight %.2f,"

@@ -18,10 +18,11 @@ account already uses; job output and server logs go to `~/ragnarok/train/logs`.
 
 The scripts that lean worlds load are in `../server/npc/`:
 
-- `rl_train.txt`: `@rlreset <task>`, the episode reset;
+- `rl_train.txt`: `@rlreset <task>`, the episode reset, and the list of task maps (`RG_TASK_MAPS` in
+  `world.sh` is the same list, for the maps a lean world loads);
 - `field_dense.txt`: extra monsters on the training field;
-- `rl_census.txt`: every 10 game minutes, each task map's monster count and the field's monsters in
-  a 4x4 grid, in the map server's log;
+- `rl_census.txt`: every 10 game minutes, each task map's monster count and its monsters in a 4x4
+  grid, in the map server's log;
 - `rl_spread.txt`: every 5 game minutes, a fifth of each task map's idle monsters move to random
   cells, so the maps stay evenly stocked (see the lessons below).
 

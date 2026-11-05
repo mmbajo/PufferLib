@@ -40,18 +40,26 @@ one GPU job on one node
     - one of 24 first-class skills.
     - Masks rule out what can't be used right now.
   - Attacks and pick-ups carry on over the next steps: rAthena never walks a player into range, so
-    the env does it.
+    the env does it. A skill on a monster does not start an attack, so a Mage keeps its distance.
   - Reward: exp gained divided by the exp the level needs, normalized by the task's scripted
     baseline so that every task pays the same at that level.
   - `perf`: exp per step relative to the task's scripted bot (1.0 = as good as that bot), logged
     per task as `<task>_perf`.
 - **One env per world**, since a world steps only when all of its bots are ready.
 
+Every class task is a first class at levels 25/25 with its skills, weapon and 30 Red Potions. The
+baselines are the scripted bots in `ragnarok_check.c`.
+
 | Task | Character | Map | Baseline (exp per step) |
 |---|---|---|---|
 | 0 `field` | Novice, level 1, Main Gauche, 30 Red Potions | `prt_fild08`: Porings, Lunatics | 0.0312 |
-| 1 `sword_skills` | Swordman 25/25, Bash 10, Magnum Break 5, Blade, 30 potions | `pay_fild01`: Spores | 0.419 |
+| 1 `sword_skills` | Swordman: Bash 10, Magnum Break 5, Blade | `pay_fild01`: Spores | 0.419 |
 | 2 `survival` | Swordman 18/18, the same skills, 10 potions | `pay_fild02`: Wolves, which help each other | 1.19 (0.18 deaths per episode) |
+| 3 `mage_skills` | Mage: Fire, Cold and Lightning Bolt 5, Soul Strike 3, Napalm Beat 3, Fire Ball 1, Frost Diver 1, Rod | `mjolnir_01`: mostly earth monsters (Coco, Caramel, Horn), some wind | 0.648 |
+| 4 `archer_skills` | Archer: Double Strafe 10, Arrow Shower 5, Owl's and Vulture's Eye 5, Bow, 2,000 Arrows | `prt_fild03`: Yoyos, Smokies | 1.344 |
+| 5 `acolyte_skills` | Acolyte: Heal 5, Blessing 5, Increase AGI 5, Club | `pay_fild01`: Spores | 0.269 |
+| 6 `thief_skills` | Thief: Double Attack 10, Envenom 5, Steal 3, Hiding 2, Main Gauche | `prt_fild03` | 1.588 |
+| 7 `merchant_skills` | Merchant: Mammonite 10 with 200,000 zeny, Axe | `mjolnir_01` | 1.053 |
 
 ## Layout
 

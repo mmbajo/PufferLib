@@ -25,10 +25,10 @@
 // Layout v2 is fixed (changing it invalidates checkpoints), so it has spare room; see the RG_OBS_*
 // offsets. Actions: verb, direction (for move), slot (a monster or item slot, for attack, pick up and
 // targeted skills) and skill (an index into RG_SKILLS). Attacking and picking up go on over the next
-// steps: the env walks the bot into range first, since rAthena never walks a player there. The
-// monster under attack stays in slot 0, so attacking slot 0 again keeps at it. Action masks rule out
-// reserved verbs, empty slots, skills the bot cannot use right now, potions above 70% HP and sitting
-// while busy.
+// steps: the env walks the bot into range first, since rAthena never walks a player there. A skill
+// on a monster does not start an attack. The monster last attacked or cast at stays in slot 0, so
+// acting on slot 0 again keeps at it. Action masks rule out reserved verbs, empty slots, skills the
+// bot cannot use right now, potions above 70% HP and sitting while busy.
 
 #include <poll.h>
 #include <sys/file.h>
@@ -42,13 +42,25 @@ typedef float obs_t;
 // ---- tasks -----------------------------------------------------------------------------------
 
 #define RG_TASKS_MAX 16  // goal one-hot width, with room for later tasks
-enum { RG_TASK_FIELD, RG_TASK_SWORD_SKILLS, RG_TASK_SURVIVAL, RG_NTASKS };
-static const char* RG_TASK_NAMES[RG_NTASKS] = {"field", "sword_skills", "survival"};
-// Each task's scripted policy (ragnarok_check, 64 bots, 6,000 steps, job 5005277): its base exp
-// per step, against which perf is measured, and its reward per step (level-normalized exp, deaths
-// included, reward_scale 1), by which rewards are normalized so every task pays the same there.
-static const float RG_TASK_BASELINE[RG_NTASKS] = {0.0312f, 0.419f, 1.19f};
-static const float RG_TASK_REWARD[RG_NTASKS] = {0.00246f, 0.00017f, 0.00097f};
+// Field leveling (a Novice), the first classes' skills (each at levels 25/25, on a field for its
+// level) and survival (a weak Swordman among wolves); server/npc/rl_train.txt sets each one up.
+enum {
+    RG_TASK_FIELD, RG_TASK_SWORD_SKILLS, RG_TASK_SURVIVAL, RG_TASK_MAGE_SKILLS, RG_TASK_ARCHER_SKILLS,
+    RG_TASK_ACOLYTE_SKILLS, RG_TASK_THIEF_SKILLS, RG_TASK_MERCHANT_SKILLS, RG_NTASKS
+};
+static const char* RG_TASK_NAMES[RG_NTASKS] = {"field",       "sword_skills", "survival",
+                                               "mage_skills", "archer_skills", "acolyte_skills",
+                                               "thief_skills", "merchant_skills"};
+// Each task's scripted policy (ragnarok_check, 64 bots): its base exp per step, against which perf
+// is measured, and the exp part of its reward per step (level-normalized exp, reward_scale 1), by
+// which the exp reward is normalized so that every task pays the same there; a death costs the same
+// everywhere. Job 5006800 (12,000 steps per task) measured all of them; the first three baselines
+// stay at job 5005277's values, so their perf reads as it did in the G0 and G1 runs (the Swordman
+// skills bot measured 0.381 there, 9% below 0.419).
+static const float RG_TASK_BASELINE[RG_NTASKS] = {0.0312f, 0.419f, 1.19f, 0.648f,
+                                                  1.344f,  0.269f, 1.588f, 1.053f};
+static const float RG_TASK_REWARD[RG_NTASKS] = {0.002628f, 0.000154f, 0.001082f, 0.000238f,
+                                                0.000484f, 0.000109f, 0.000562f, 0.000390f};
 
 // ---- layout v2 -------------------------------------------------------------------------------
 
@@ -107,7 +119,7 @@ static const int RG_STAT_WEIGHTS[7][6] = {
     {3, 2, 2, 0, 1, 0}, {3, 2, 2, 0, 1, 0}, {0, 1, 1, 3, 2, 0}, {1, 2, 1, 0, 3, 0},
     {1, 1, 2, 3, 1, 0}, {3, 1, 2, 0, 1, 0}, {2, 3, 1, 0, 1, 0}};
 
-#define RG_LOG_TASKS 8
+#define RG_LOG_TASKS RG_TASKS_MAX
 struct Log {
     float perf;
     float score;
@@ -137,6 +149,7 @@ typedef struct RgBot {
     int task, reset_wait;  // reset_wait: steps left before a fresh @rlreset has landed
     int intent, attacking;
     uint32_t target, item;
+    uint32_t focus;  // the monster last attacked or targeted by a skill: it stays in slot 0
     double intent_since, last_attack, last_pickup;
     uint32_t slot_mob[RG_MOBS], slot_item[RG_ITEMS];
     int64_t base_seen, job_seen;  // cumulative exp at the end of the last step
@@ -245,6 +258,7 @@ static void rg_act(RgBot* b, const float* a) {
                 b->attacking = 0;
                 b->intent_since = c->now;
             }
+            b->focus = b->target;
             if (c->sitting) ro_sit(c, 0);
         }
         break;
@@ -275,9 +289,13 @@ static void rg_act(RgBot* b, const float* a) {
         if (s->inf & 1) {  // on an enemy: the monster in the slot
             if (!u) break;
             ro_use_skill(c, s->id, level, u->id);
-            b->intent = RG_ATTACKING;
-            b->target = u->id;
-            b->intent_since = c->now;
+            // It becomes the focus. A skill does not start an attack (a Mage would walk up to melee
+            // after every bolt), but an attack under way moves to the skill's target.
+            b->focus = u->id;
+            if (b->intent == RG_ATTACKING && b->target != u->id) {
+                b->target = u->id;
+                b->intent_since = c->now;
+            }
         } else if (s->inf & 2) {  // on the ground: the monster's cell, else under the bot
             int tx = x, ty = y;
             if (u) ro_unit_pos(c, u, &tx, &ty);
@@ -405,15 +423,15 @@ static void rg_observe(Env* env, int i) {
             f[4] = rg_skill_ready(c, sk) > 0;
         }
 
-        // The monster being attacked first, so that attacking slot 0 keeps at it; then the nearest,
-        // by insertion into a short sorted list.
+        // The focus first (the monster last attacked or cast at), so that slot 0 keeps at it; then
+        // the nearest, by insertion into a short sorted list.
         int order[RG_MOBS], keys[RG_MOBS], dists[RG_MOBS], n = 0;
         for (int u = 0; u < c->nunits; u++) {
             if (c->units[u].type != RO_OBJ_MOB) continue;
             int ux, uy;
             ro_unit_pos(c, &c->units[u], &ux, &uy);
             int d = rg_dist(x, y, ux, uy), at = n < RG_MOBS ? n++ : RG_MOBS;
-            int key = b->intent == RG_ATTACKING && c->units[u].id == b->target ? -1 : d;
+            int key = c->units[u].id == b->focus ? -1 : d;
             if (at == RG_MOBS && key >= keys[RG_MOBS - 1]) continue;
             if (at == RG_MOBS) at = RG_MOBS - 1;
             while (at > 0 && keys[at - 1] > key) {
@@ -513,6 +531,7 @@ static void rg_begin_episode(RgBot* b) {
     b->deaths_seen = c->deaths;
     b->intent = RG_NONE;
     b->attacking = 0;
+    b->focus = 0;
 }
 
 // Draw the bot's next task and send its reset; the reset lands during the next step.
