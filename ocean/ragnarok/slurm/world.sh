@@ -246,11 +246,30 @@ world_alive() {
     done
 }
 
+# True while process $1 runs (a child that exited stays a zombie until waited for).
+world_running() {
+    [ -r /proc/$1/status ] && ! grep -q '^State:[[:space:]]*Z' /proc/$1/status 2>/dev/null
+}
+
+# Stops process $1 with TERM, and with KILL if it is still running after WORLD_STOP_WAIT seconds:
+# a lockstep map server has been seen to spin forever while kicking its last players at shutdown.
+world_stop() {
+    local pid=$1 deadline=$((SECONDS + ${WORLD_STOP_WAIT:-30}))
+    kill -TERM $pid 2>/dev/null
+    while world_running $pid && [ $SECONDS -lt $deadline ]; do
+        sleep 0.2
+    done
+    if world_running $pid; then
+        wlog "process $pid ($(ps -o comm= -p $pid)) did not stop in ${WORLD_STOP_WAIT:-30}s; killing it"
+        kill -KILL $pid 2>/dev/null
+    fi
+    wait $pid 2>/dev/null
+}
+
 world_stop_all() {
     local pid d
     for ((i = ${#WORLD_PIDS[@]} - 1; i >= 0; i--)); do
-        kill -TERM ${WORLD_PIDS[$i]} 2>/dev/null
-        wait ${WORLD_PIDS[$i]} 2>/dev/null
+        world_stop ${WORLD_PIDS[$i]}
     done
     WORLD_PIDS=()
     for d in $WORLD_ROOT/w*; do
