@@ -6,25 +6,26 @@
 // that bot is reset elsewhere. Kills spread monsters too, since a monster respawns on a random
 // cell, so a map with few bots on it probably clumps faster. Every 5 minutes of game time, a fifth
 // of each map's monsters that are not fighting move to random cells, so each is placed afresh about
-// every 25 minutes. freeloop: one pass over three stocked maps (about 660 monsters) is more loop
-// steps than rAthena allows a script by default, which would abort it as an infinite loop.
+// every 25 minutes. The maps are every task's, $@rl_maps$ from rl_train.txt. freeloop: one pass over
+// the stocked maps (about 660 monsters on three) is more loop steps than rAthena allows a script by
+// default, which would abort it as an infinite loop.
 -	script	rl_spread	-1,{
 OnInit:
-	setarray .maps$[0], "prt_fild08", "pay_fild01", "pay_fild02";
 	initnpctimer;
 	end;
 OnTimer300000:
 	freeloop(1);
 	.@moved = 0;
-	for (.@m = 0; .@m < getarraysize(.maps$); .@m++) {
-		.@n = getmapunits(BL_MOB, .maps$[.@m], .@gid);
+	for (.@m = 0; .@m < getarraysize($@rl_maps$); .@m++) {
+		.@map$ = $@rl_maps$[.@m];
+		.@n = getmapunits(BL_MOB, .@map$, .@gid);
 		for (.@i = 0; .@i < .@n; .@i++) {
 			if (rand(5))
 				continue;
 			getunitdata .@gid[.@i], .@d;
 			if (.@d[UMOB_TARGETID])
 				continue;
-			unitwarp .@gid[.@i], .maps$[.@m], -1, -1;
+			unitwarp .@gid[.@i], .@map$, -1, -1;
 			.@moved++;
 		}
 		deletearray .@gid;
