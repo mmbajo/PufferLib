@@ -1,0 +1,2 @@
+# All nine tasks drawn by the curriculum, 300M steps per task.
+--env.task0_weight=1 --env.task1_weight=1 --env.task2_weight=1 --env.task3_weight=1 --env.task4_weight=1 --env.task5_weight=1 --env.task6_weight=1 --env.task7_weight=1 --env.task8_weight=1 --train.total_timesteps=2700000000 --env.curriculum=1
