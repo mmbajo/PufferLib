@@ -17,13 +17,14 @@ STEPS=${2:-600}
 REPEAT=${3:-1}
 node=$(hostname -s)
 job=$SLURM_JOB_ID
-export RATHENA=/home/user02198/ragnarok/rathena-train
+export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-re}  # or ~/ragnarok/rathena-train (pre-renewal)
 export WORLD_LEAN=1
 export WORLD_ACCOUNT_BLOCKS=5  # each env start claims its own block of accounts
 export WORLD_MAP_CONF=$'lockstep: yes\nlockstep_debug: yes\nautosave_time: 3600'
 RG=${RG:-/home/user02198/ragnarok/PufferLib/ocean/ragnarok}
 source $RG/slurm/world.sh
 export WORLD_MAPS=${WORLD_MAPS:-$RG_TASK_MAPS}
+world_check_client || exit 6
 wlog "node=$node job=$job bots=$NBOTS steps=$STEPS action_repeat=$REPEAT"
 others=$(squeue -u "$USER" -h -w "$node" -o %i | grep -vx "$job" | awk -v j=$job '$1 + 0 < j + 0')
 if [ -n "$others" ]; then

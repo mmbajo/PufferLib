@@ -1,8 +1,10 @@
 // rathena_client.h: a small Ragnarok Online client for rAthena, written for bots.
 //
-// Client version 20130618, pre-renewal, packet obfuscation off; the packet ids, lengths and
-// layouts come from rathena_packets.h, which gen/gen_packets.py generates from rAthena's source.
-// Header-only: every function is static. Link with -lz (zlib, for the map cache).
+// Speaks the client version and rules rathena_packets.h was generated for (gen/gen_packets.py, from
+// rAthena's own source), with packet obfuscation off: 20130618 pre-renewal and 20221005 renewal are
+// tested. Packet ids, lengths and layouts all come from that header, so another version needs only a
+// regenerated header (RO_PACKETS_H picks one other than the default). Header-only: every function is
+// static. Link with -lz (zlib, for the map cache).
 //
 // Use: fill host/login_port/user/pass, call ro_login() (blocking, a few round trips), then call
 // ro_poll() often; it reads what the map server sent and keeps the world model in RoClient up to
@@ -26,6 +28,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +49,13 @@ int uncompress(unsigned char* dest, unsigned long* dest_len, const unsigned char
 #endif
 #define RO_Z_OK 0
 
+#ifdef RO_PACKETS_H
+#include RO_PACKETS_H
+#else
 #include "rathena_packets.h"
+#endif
+// The lockstep patch's step-done packet (server/patches), the same in every version.
+#define RO_ZC_LOCKSTEP_DONE 0x0cf1
 
 #define RO_API static __attribute__((unused))
 
@@ -90,7 +99,25 @@ typedef struct RoUnit {
     uint8_t boss;
     uint8_t hit_by_me;
     double last_hit_me;  // client ms, 0 if never
+    int16_t opt1, opt2;  // body state (1 stone, 2 frozen, 3 stunned, 4 asleep, 6 turning to stone) and
+    int32_t option;      // health state bits (RO_OPT2_*); option bits (hidden, cloaked, cart, ...)
 } RoUnit;
+
+// Health state bits (rAthena's OPT2_*): poisoned (and deadly poison), cursed, silenced, blind,
+// bleeding.
+#define RO_OPT2_POISON 0x01
+#define RO_OPT2_CURSE 0x02
+#define RO_OPT2_SILENCE 0x04
+#define RO_OPT2_BLIND 0x10
+#define RO_OPT2_BLEEDING 0x40
+#define RO_OPT2_DPOISON 0x80
+
+// A status effect on the bot (a status icon: rAthena's EFST_* id), with when it ends.
+#define RO_MAX_EFFECTS 64
+typedef struct RoEffect {
+    int16_t id;
+    double until, total;  // client ms; until 0: no end was given
+} RoEffect;
 
 typedef struct RoGround {
     uint32_t id;
@@ -154,6 +181,10 @@ typedef struct RoClient {
     uint16_t cast_skill;
     double skill_failed_at;    // the last rejected skill request (ZC_ACK_TOUSESKILL)
     uint16_t skill_failed_id, skill_failed_cause;
+    RoEffect effects[RO_MAX_EFFECTS];  // status icons on the bot
+    int neffects;
+    int16_t opt1, opt2;        // the bot's body and health state, as for units
+    int32_t option;
 
     // World around it.
     RoUnit units[RO_MAX_UNITS];
@@ -191,6 +222,10 @@ RO_API int ro_fail(RoClient* c, const char* fmt, ...) {
 }
 
 RO_API uint16_t ro_u16(const uint8_t* p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+RO_API uint32_t ro_u32(const uint8_t* p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
 
 RO_API void ro_put16(uint8_t* p, uint16_t v) { p[0] = v & 0xff; p[1] = v >> 8; }
 
@@ -258,7 +293,8 @@ RO_API int64_t ro_total_job_exp(const RoClient* c) { return c->job_offset + c->j
 // ---- map cache -------------------------------------------------------------------------------
 
 // rAthena's map_cache.dat: u32 size, u16 count, u16 pad, then per map name[12] i16 xs i16 ys i32 len
-// and len bytes of zlib-compressed gat cell types. The map server reads db/import, db/pre-re, then db.
+// and len bytes of zlib-compressed gat cell types. The map server reads db/import, then db/pre-re or
+// db/re by its rules (renewal has its own prt_fild08, for one), then db.
 static pthread_mutex_t ro_maps_lock = PTHREAD_MUTEX_INITIALIZER;
 static RoMap ro_maps[64];
 static int ro_nmaps;
@@ -302,7 +338,7 @@ RO_API const RoMap* ro_map_get(const char* db_dir, const char* name) {
     for (int i = 0; i < ro_nmaps && !m; i++)
         if (strcmp(ro_maps[i].name, name) == 0) m = &ro_maps[i];
     if (!m && db_dir && ro_nmaps < 64) {
-        const char* subdirs[] = {"import/", "pre-re/", ""};
+        const char* subdirs[] = {"import/", RO_RULES_DIR "/", ""};
         char path[512];
         for (int i = 0; i < 3 && !m; i++) {
             snprintf(path, sizeof path, "%s/%smap_cache.dat", db_dir, subdirs[i]);
@@ -418,18 +454,18 @@ RO_API int ro_login(RoClient* c, int slot) {
     if (ro_dial(c, c->login_port) < 0) return -1;
     RO_PACKET_CA_LOGIN login;
     memset(&login, 0, sizeof login);
-    login.packetType = 0x64;
+    login.packetType = RO_HEADER_CA_LOGIN;
     login.version = 55;
     snprintf(login.username, sizeof login.username, "%s", c->user);
     snprintf(login.password, sizeof login.password, "%s", c->pass);
     if (ro_send(c, &login, sizeof login) < 0) return -1;
     int len = ro_read_packet(c, buf, sizeof buf);
     if (len < 0) return -1;
-    if (ro_u16(buf) != 0x69) {
-        // AC_REFUSE_LOGIN (0x83e for this client, 0x6a for older ones): 0 unknown id, 1 wrong
-        // password, 3 rejected, 5 client version, 6 banned.
+    if (ro_u16(buf) != RO_HEADER_AC_ACCEPT_LOGIN) {
+        // AC_REFUSE_LOGIN (0x83e from 2010 on, 0x6a before): 0 unknown id, 1 wrong password,
+        // 3 rejected, 5 client version, 6 banned.
         uint32_t error = 0;
-        if (ro_u16(buf) == 0x81) error = buf[2];  // SC_NOTIFY_BAN: 2 = already logged in
+        if (ro_u16(buf) == RO_HEADER_SC_NOTIFY_BAN) error = buf[2];  // 2 = already logged in
         else if (len >= 6) memcpy(&error, buf + 2, 4);
         return ro_fail(c, "login refused: packet 0x%04x, error %u", ro_u16(buf), error);
     }
@@ -445,7 +481,7 @@ RO_API int ro_login(RoClient* c, int slot) {
     // 2. Char server: CH_ENTER; it echoes the account id, then sends the character list.
     if (ro_dial(c, char_port) < 0) return -1;
     uint8_t enter[17] = {0};
-    ro_put16(enter, 0x65);
+    ro_put16(enter, 0x65);  // CH_ENTER, the same in every version (rAthena has no name for it)
     ro_put32(enter + 2, c->aid);
     ro_put32(enter + 6, c->login_id1);
     ro_put32(enter + 10, c->login_id2);
@@ -456,8 +492,8 @@ RO_API int ro_login(RoClient* c, int slot) {
     for (int got_list = 0; !got_list;) {
         if ((len = ro_read_packet(c, buf, sizeof buf)) < 0) return -1;
         int cmd = ro_u16(buf);
-        if (cmd == 0x6c) return ro_fail(c, "char server refused: error %d", buf[2]);
-        if (cmd != 0x6b) continue;  // HC_ACCEPT_ENTER2 (0x82d) comes first
+        if (cmd == RO_HEADER_HC_REFUSE_ENTER) return ro_fail(c, "char server refused: error %d", buf[2]);
+        if (cmd != RO_HEADER_HC_ACCEPT_ENTER) continue;  // HC_ACCEPT_ENTER2 (0x82d) comes first
         const RO_CHARACTER_INFO* chars = (const RO_CHARACTER_INFO*)(buf + sizeof(RO_PACKET_HC_ACCEPT_ENTER));
         int n = (len - (int)sizeof(RO_PACKET_HC_ACCEPT_ENTER)) / (int)sizeof(RO_CHARACTER_INFO);
         for (int i = 0; i < n; i++) {
@@ -472,28 +508,34 @@ RO_API int ro_login(RoClient* c, int slot) {
     if (!have_char) {
         RO_PACKET_CH_MAKE_CHAR make;
         memset(&make, 0, sizeof make);
-        make.packetType = 0x970;
+        make.packetType = RO_HEADER_CH_MAKE_CHAR;
         snprintf(make.name, sizeof make.name, "%s", c->user);
         make.slot = slot;
         make.hair_color = 0;
         make.hair_style = 1;
+#ifdef RO_HAS_PACKET_CH_MAKE_CHAR_job
+        make.job = 0;  // Novice (0x0a39, from 2015-10 on, names the starting job and the sex)
+#endif
+#ifdef RO_HAS_PACKET_CH_MAKE_CHAR_sex
+        make.sex = c->sex;
+#endif
         if (ro_send(c, &make, sizeof make) < 0) return -1;
     }
     for (int made = have_char; !made;) {
         if ((len = ro_read_packet(c, buf, sizeof buf)) < 0) return -1;
         int cmd = ro_u16(buf);
-        if (cmd == 0x6e) return ro_fail(c, "character creation refused: error %d", buf[2]);
-        if (cmd != 0x6d) continue;
+        if (cmd == RO_HEADER_HC_REFUSE_MAKECHAR) return ro_fail(c, "character creation refused: error %d", buf[2]);
+        if (cmd != RO_HEADER_HC_ACCEPT_MAKECHAR) continue;
         ro_from_charinfo(c, &((RO_PACKET_HC_ACCEPT_MAKECHAR*)buf)->character);
         made = 1;
     }
-    RO_PACKET_CH_SELECT_CHAR sel = {0x66, (uint8_t)slot};
+    RO_PACKET_CH_SELECT_CHAR sel = {RO_HEADER_CH_SELECT_CHAR, (uint8_t)slot};
     if (ro_send(c, &sel, sizeof sel) < 0) return -1;
     for (;;) {
         if ((len = ro_read_packet(c, buf, sizeof buf)) < 0) return -1;
         int cmd = ro_u16(buf);
-        if (cmd == 0x6c) return ro_fail(c, "character select refused: error %d", buf[2]);
-        if (cmd == 0x71) break;
+        if (cmd == RO_HEADER_HC_REFUSE_ENTER) return ro_fail(c, "character select refused: error %d", buf[2]);
+        if (cmd == RO_HEADER_HC_NOTIFY_ZONESVR) break;
     }
     RO_PACKET_HC_NOTIFY_ZONESVR* zone = (RO_PACKET_HC_NOTIFY_ZONESVR*)(buf);
     c->cid = zone->CID;
@@ -591,6 +633,42 @@ RO_API const RoSkill* ro_skill_find(const RoClient* c, int id) {
     for (int i = 0; i < c->nskills; i++)
         if (c->skills[i].id == id && c->skills[i].level > 0) return &c->skills[i];
     return NULL;
+}
+
+// A status effect on the bot: the ms it has left (1e9 when no end was given), or 0 if it is off.
+RO_API double ro_effect_left(const RoClient* c, int id) {
+    for (int i = 0; i < c->neffects; i++)
+        if (c->effects[i].id == id) {
+            if (c->effects[i].until <= 0) return 1e9;
+            return c->effects[i].until > c->now ? c->effects[i].until - c->now : 0;
+        }
+    return 0;
+}
+
+// The share of a status effect's time that is left: 1 when no end was given, 0 if it is off.
+RO_API float ro_effect_share(const RoClient* c, int id) {
+    for (int i = 0; i < c->neffects; i++)
+        if (c->effects[i].id == id) {
+            if (c->effects[i].until <= 0 || c->effects[i].total <= 0) return 1;
+            return c->effects[i].until > c->now ? (float)((c->effects[i].until - c->now) / c->effects[i].total) : 0;
+        }
+    return 0;
+}
+
+static void ro_effect_set(RoClient* c, int id, int on, double total, double left) {
+    int i = 0;
+    while (i < c->neffects && c->effects[i].id != id) i++;
+    if (!on) {
+        if (i < c->neffects) c->effects[i] = c->effects[--c->neffects];
+        return;
+    }
+    if (i == c->neffects) {
+        if (c->neffects == RO_MAX_EFFECTS) return;
+        c->neffects++;
+    }
+    c->effects[i].id = (int16_t)id;
+    c->effects[i].until = left > 0 ? c->now + left : 0;
+    c->effects[i].total = total > 0 ? total : left;
 }
 
 // Use a skill on a unit (a monster, a player, or ourselves: target = c->aid).
@@ -761,23 +839,36 @@ RO_API void ro_set_status(RoClient* c, int var, int64_t v) {
 RO_API void ro_unit_from_packet(RoClient* c, const uint8_t* buf, int cmd) {
     // The three unit packets share their head; position fields differ (see rathena_packets.h).
     const RO_packet_idle_unit* idle = (const RO_packet_idle_unit*)(buf);
-    if (idle->GID == c->aid) return;
-    RoUnit* u = ro_unit_upsert(c, idle->GID);
+    RO_STATIC_ASSERT(offsetof(RO_packet_idle_unit, speed) == offsetof(RO_packet_unit_walking, speed)
+                     && offsetof(RO_packet_idle_unit, job) == offsetof(RO_packet_spawn_unit, job),
+                     "unit packets share their head");
+#ifdef RO_HAS_packet_idle_unit_AID
+    uint32_t id = idle->AID;  // from 2013-12 on, GID is a player's character id and 0 for the rest
+#else
+    uint32_t id = idle->GID;
+#endif
+    if (id == c->aid) return;
+    RoUnit* u = ro_unit_upsert(c, id);
     if (!u) return;
     u->type = idle->objecttype;
     u->cls = idle->job;
     u->speed = idle->speed;
+#ifdef RO_HAS_packet_idle_unit_bodyState
+    u->opt1 = idle->bodyState;
+    u->opt2 = idle->healthState;
+    u->option = idle->effectState;
+#endif
     u->t0 = c->now;
-    if (cmd == 0x914) {
+    if (cmd == RO_TYPE_unit_walkingType) {
         const RO_packet_unit_walking* w = (const RO_packet_unit_walking*)(buf);
         ro_get_pos2(w->MoveData, &u->x0, &u->y0, &u->x1, &u->y1);
         u->maxhp = w->maxHP; u->hp = w->HP; u->boss = w->isBoss;
         if (c->lockstep) u->t0 = (double)w->moveStartTime;
     } else {
-        const uint8_t* pos = cmd == 0x90f ? ((const RO_packet_spawn_unit*)buf)->PosDir : idle->PosDir;
+        const uint8_t* pos = cmd == RO_TYPE_spawn_unitType ? ((const RO_packet_spawn_unit*)buf)->PosDir : idle->PosDir;
         ro_get_pos(pos, &u->x0, &u->y0);
         u->x1 = u->x0; u->y1 = u->y0;
-        if (cmd == 0x90f) {
+        if (cmd == RO_TYPE_spawn_unitType) {
             const RO_packet_spawn_unit* s = (const RO_packet_spawn_unit*)(buf);
             u->maxhp = s->maxHP; u->hp = s->HP; u->boss = s->isBoss;
         } else {
@@ -790,7 +881,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
     int cmd = ro_u16(buf);
     c->packets_seen++;
     switch (cmd) {
-    case 0x2eb: {  // ZC_ACCEPT_ENTER: we are on the map
+    case RO_HEADER_ZC_ACCEPT_ENTER: {  // we are on the map
         const RO_PACKET_ZC_ACCEPT_ENTER* p = (const RO_PACKET_ZC_ACCEPT_ENTER*)(buf);
         ro_get_pos(p->posDir, &c->x0, &c->y0);
         c->x1 = c->x0; c->y1 = c->y0; c->t0 = c->now;
@@ -800,7 +891,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         ro_ticksend(c);
         break;
     }
-    case 0x91: {  // ZC_NPCACK_MAPMOVE: warped, possibly on the same map
+    case RO_HEADER_ZC_NPCACK_MAPMOVE: {  // warped, possibly on the same map
         const RO_PACKET_ZC_NPCACK_MAPMOVE* p = (const RO_PACKET_ZC_NPCACK_MAPMOVE*)(buf);
         snprintf(c->map, sizeof c->map, "%.15s", p->mapName);
         char* dot = strchr(c->map, '.');
@@ -813,9 +904,9 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         ro_load_end(c);
         break;
     }
-    case 0x92: ro_fail(c, "moved to another map server; not supported"); break;
-    case 0x81: ro_fail(c, "map server refused the connection: error %d", buf[2]); break;
-    case 0x80: {  // ZC_NOTIFY_VANISH; type 1 = died
+    case RO_HEADER_ZC_NPCACK_SERVERMOVE: ro_fail(c, "moved to another map server; not supported"); break;
+    case RO_HEADER_SC_NOTIFY_BAN: ro_fail(c, "map server refused the connection: error %d", buf[2]); break;
+    case RO_HEADER_ZC_NOTIFY_VANISH: {  // type 1 = died
         const RO_PACKET_ZC_NOTIFY_VANISH* p = (const RO_PACKET_ZC_NOTIFY_VANISH*)(buf);
         if (p->gid == c->aid) {
             if (p->type == 1 && !c->dead) { c->dead = 1; c->deaths++; }
@@ -826,13 +917,13 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         ro_unit_remove(c, p->gid);
         break;
     }
-    case 0x87: {  // ZC_NOTIFY_PLAYERMOVE: our own walk
+    case RO_HEADER_ZC_NOTIFY_PLAYERMOVE: {  // our own walk
         const RO_PACKET_ZC_NOTIFY_PLAYERMOVE* p = (const RO_PACKET_ZC_NOTIFY_PLAYERMOVE*)(buf);
         ro_get_pos2(p->moveData, &c->x0, &c->y0, &c->x1, &c->y1);
         c->t0 = c->lockstep ? (double)p->moveStartTime : c->now;
         break;
     }
-    case 0x88: {  // ZC_STOPMOVE
+    case RO_HEADER_ZC_STOPMOVE: {
         const RO_PACKET_ZC_STOPMOVE* p = (const RO_PACKET_ZC_STOPMOVE*)(buf);
         if (p->AID == c->aid) {
             c->x0 = c->x1 = (int16_t)p->xPos; c->y0 = c->y1 = (int16_t)p->yPos; c->t0 = c->now;
@@ -842,8 +933,10 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x90f: case 0x914: case 0x915: ro_unit_from_packet(c, buf, cmd); break;
-    case 0x2e1: {  // ZC_NOTIFY_ACT
+    case RO_TYPE_spawn_unitType: case RO_TYPE_unit_walkingType: case RO_TYPE_idle_unitType:
+        ro_unit_from_packet(c, buf, cmd);
+        break;
+    case RO_HEADER_ZC_NOTIFY_ACT: {
         const RO_PACKET_ZC_NOTIFY_ACT* p = (const RO_PACKET_ZC_NOTIFY_ACT*)(buf);
         int hit = p->type == RO_DMG_NORMAL || p->type == RO_DMG_MULTI_HIT || p->type == RO_DMG_CRITICAL
                   || p->type == RO_DMG_ENDURE || p->type == RO_DMG_LUCKY_DODGE;
@@ -862,7 +955,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x10f: {  // ZC_SKILLINFO_LIST: every skill the character has
+    case RO_HEADER_ZC_SKILLINFO_LIST: {  // every skill the character has
         c->nskills = 0;
         for (int off = (int)sizeof(RO_PACKET_ZC_SKILLINFO_LIST); off + (int)sizeof(RO_SKILLDATA) <= len
              && c->nskills < RO_MAX_SKILLS; off += (int)sizeof(RO_SKILLDATA)) {
@@ -873,7 +966,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x10e: {  // ZC_SKILLINFO_UPDATE: one skill changed
+    case RO_HEADER_ZC_SKILLINFO_UPDATE: {  // one skill changed
         const RO_PACKET_ZC_SKILLINFO_UPDATE* p = (const RO_PACKET_ZC_SKILLINFO_UPDATE*)(buf);
         for (int i = 0; i < c->nskills; i++)
             if (c->skills[i].id == p->skillId) {
@@ -881,7 +974,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
             }
         break;
     }
-    case 0x7fb: {  // ZC_USESKILL_ACK: someone started casting
+    case RO_HEADER_ZC_USESKILL_ACK: {  // someone started casting
         const RO_PACKET_ZC_USESKILL_ACK* p = (const RO_PACKET_ZC_USESKILL_ACK*)(buf);
         if (p->srcId == c->aid) {
             c->cast_until = c->now + p->delayTime;
@@ -889,7 +982,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x110: {  // ZC_ACK_TOUSESKILL: a skill request was refused
+    case RO_HEADER_ZC_ACK_TOUSESKILL: {  // a skill request was refused
         const RO_PACKET_ZC_ACK_TOUSESKILL* p = (const RO_PACKET_ZC_ACK_TOUSESKILL*)(buf);
         if (!p->flag) {
             c->skill_failed_at = c->now;
@@ -900,13 +993,13 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x43d: {  // ZC_SKILL_POSTDELAY: a skill's cooldown
+    case RO_HEADER_ZC_SKILL_POSTDELAY: {  // a skill's cooldown
         const RO_PACKET_ZC_SKILL_POSTDELAY* p = (const RO_PACKET_ZC_SKILL_POSTDELAY*)(buf);
         for (int i = 0; i < c->nskills; i++)
             if (c->skills[i].id == p->SKID) c->skills[i].ready_at = c->now + p->DelayTM;
         break;
     }
-    case 0x1de: {  // ZC_NOTIFY_SKILL: skill damage
+    case RO_HEADER_ZC_NOTIFY_SKILL: {  // skill damage
         const RO_PACKET_ZC_NOTIFY_SKILL* p = (const RO_PACKET_ZC_NOTIFY_SKILL*)(buf);
         if (p->AID == c->aid) {
             RoUnit* u = ro_unit_find(c, p->targetID);
@@ -920,22 +1013,22 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x11a: {  // ZC_USE_SKILL: a support skill took effect
+    case RO_HEADER_ZC_USE_SKILL: {  // a support skill took effect
         const RO_PACKET_ZC_USE_SKILL* p = (const RO_PACKET_ZC_USE_SKILL*)(buf);
         if (p->srcAID == c->aid && c->cast_skill == p->SKID) c->cast_until = 0;
         break;
     }
-    case 0x1d7: {  // ZC_SPRITE_CHANGE2: look type 0 is the job (a job change)
+    case RO_TYPE_sendLookType: {  // ZC_SPRITE_CHANGE2: look type 0 is the job (a job change)
         const RO_PACKET_ZC_SPRITE_CHANGE* p = (const RO_PACKET_ZC_SPRITE_CHANGE*)(buf);
         if (p->AID == c->aid && p->type == 0) c->job = p->val;
         break;
     }
-    case 0x139: {  // ZC_ATTACK_FAILURE_FOR_DISTANCE <target>.L <tx>.W <ty>.W <x>.W <y>.W <range>.W
+    case RO_HEADER_ZC_ATTACK_FAILURE_FOR_DISTANCE: {  // <target>.L <tx>.W <ty>.W <x>.W <y>.W <range>.W
         memcpy(&c->too_far_id, buf + 2, 4);
         c->too_far_at = c->now;
         break;
     }
-    case 0x977: {  // ZC_HP_INFO: <id>.L <hp>.L <maxhp>.L
+    case RO_TYPE_monsterhpType: {  // ZC_HP_INFO: <id>.L <hp>.L <maxhp>.L
         uint32_t id = buf[2] | buf[3] << 8 | buf[4] << 16 | (uint32_t)buf[5] << 24;
         RoUnit* u = ro_unit_find(c, id);
         if (u) {
@@ -944,18 +1037,18 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x84b: {  // ZC_ITEM_FALL_ENTRY: an item dropped
+    case RO_TYPE_dropflooritemType: {  // ZC_ITEM_FALL_ENTRY: an item dropped
         const RO_packet_dropflooritem* p = (const RO_packet_dropflooritem*)(buf);
         ro_ground_add(c, p->ITAID, p->ITID, p->xPos, p->yPos, p->count);
         break;
     }
-    case 0x9d: {  // ZC_ITEM_ENTRY: an item already on the ground came into view
+    case RO_HEADER_ZC_ITEM_ENTRY: {  // an item already on the ground came into view
         const RO_PACKET_ZC_ITEM_ENTRY* p = (const RO_PACKET_ZC_ITEM_ENTRY*)(buf);
         ro_ground_add(c, p->AID, p->itemId, p->x, p->y, p->amount);
         break;
     }
-    case 0xa1: ro_ground_remove(c, ((const RO_PACKET_ZC_ITEM_DISAPPEAR*)buf)->itemAid); break;
-    case 0x990: {  // ZC_ITEM_PICKUP_ACK
+    case RO_HEADER_ZC_ITEM_DISAPPEAR: ro_ground_remove(c, ((const RO_PACKET_ZC_ITEM_DISAPPEAR*)buf)->itemAid); break;
+    case RO_HEADER_ZC_ITEM_PICKUP_ACK: {
         const RO_PACKET_ZC_ITEM_PICKUP_ACK* p = (const RO_PACKET_ZC_ITEM_PICKUP_ACK*)(buf);
         if (p->result == 0) {
             RoInv* v = ro_inv_slot(c, p->Index);
@@ -966,14 +1059,18 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x991: case 0x992: {  // inventory lists, normal and equipment
-        int head = 4, size = cmd == 0x991 ? (int)sizeof(RO_NORMALITEM_INFO) : (int)sizeof(RO_EQUIPITEM_INFO);
+    case RO_TYPE_inventorylistnormalType: case RO_TYPE_inventorylistequipType: {  // inventory lists
+        int normal = cmd == RO_TYPE_inventorylistnormalType;
+        int head = normal ? RO_ITEMLIST_NORMAL_HEAD : RO_ITEMLIST_EQUIP_HEAD;
+        int size = normal ? (int)sizeof(RO_NORMALITEM_INFO) : (int)sizeof(RO_EQUIPITEM_INFO);
+        // From 2018 on the cart and storage lists share these ids; byte 4 says whose list it is.
+        if (head > 4 && buf[4] != 0) break;
         if ((len - head) % size != 0) {
             ro_fail(c, "inventory list 0x%04x of %d bytes does not divide into %d-byte items", cmd, len, size);
             break;
         }
         for (int off = head; off + size <= len; off += size) {
-            if (cmd == 0x991) {
+            if (normal) {
                 const RO_NORMALITEM_INFO* it = (const RO_NORMALITEM_INFO*)(buf + off);
                 RoInv* v = ro_inv_slot(c, it->index);
                 if (v) { v->item = it->ITID; v->amount = it->count; v->type = it->type; v->worn = 0; }
@@ -988,7 +1085,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0x1c8: {  // ZC_USE_ITEM_ACK: amount is what is left
+    case RO_TYPE_useItemAckType: {  // ZC_USE_ITEM_ACK: amount is what is left
         const RO_PACKET_ZC_USE_ITEM_ACK* p = (const RO_PACKET_ZC_USE_ITEM_ACK*)(buf);
         if (p->AID == c->aid && p->result) {
             RoInv* v = ro_inv_slot(c, p->index);
@@ -1000,33 +1097,77 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         break;
     }
-    case 0xaf: ro_inv_take(c, ((const RO_PACKET_ZC_ITEM_THROW_ACK*)buf)->index,
-                           ((const RO_PACKET_ZC_ITEM_THROW_ACK*)buf)->count); break;
-    case 0x7fa: ro_inv_take(c, ((const RO_PACKET_ZC_DELETE_ITEM_FROM_BODY*)buf)->index,
-                            ((const RO_PACKET_ZC_DELETE_ITEM_FROM_BODY*)buf)->count); break;
-    case 0xb0: case 0xb1: {  // ZC_PAR_CHANGE, ZC_LONGPAR_CHANGE
+    case RO_HEADER_ZC_ITEM_THROW_ACK:
+        ro_inv_take(c, ((const RO_PACKET_ZC_ITEM_THROW_ACK*)buf)->index, ((const RO_PACKET_ZC_ITEM_THROW_ACK*)buf)->count);
+        break;
+    case RO_HEADER_ZC_DELETE_ITEM_FROM_BODY:
+        ro_inv_take(c, ((const RO_PACKET_ZC_DELETE_ITEM_FROM_BODY*)buf)->index,
+                    ((const RO_PACKET_ZC_DELETE_ITEM_FROM_BODY*)buf)->count);
+        break;
+    case RO_HEADER_ZC_PAR_CHANGE: case RO_HEADER_ZC_LONGPAR_CHANGE: {
         const RO_PACKET_ZC_PAR_CHANGE* p = (const RO_PACKET_ZC_PAR_CHANGE*)(buf);
         ro_set_status(c, p->varID, p->count);
         break;
     }
-    case 0xbd: {  // ZC_STATUS
+#ifdef RO_HAVE_PACKET_ZC_LONGLONGPAR_CHANGE
+    case RO_HEADER_ZC_LONGLONGPAR_CHANGE: {  // exp and the exp to the next level, from 2017-08 on
+        const RO_PACKET_ZC_LONGLONGPAR_CHANGE* p = (const RO_PACKET_ZC_LONGLONGPAR_CHANGE*)(buf);
+        ro_set_status(c, p->varID, p->amount);
+        break;
+    }
+#endif
+    case RO_HEADER_ZC_STATUS: {
         const RO_PACKET_ZC_STATUS* p = (const RO_PACKET_ZC_STATUS*)(buf);
         c->status_points = p->point;
         c->str = p->str; c->agi = p->agi; c->vit = p->vit; c->int_ = p->int_; c->dex = p->dex; c->luk = p->luk;
         break;
     }
-    case 0xbc:  // ZC_STATUS_CHANGE_ACK: <type>.W <ok>.B <value>.B after a stat raise
+    case RO_HEADER_ZC_STATUS_CHANGE_ACK:  // <type>.W <ok>.B <value>.B after a stat raise
         if (buf[4]) ro_set_status(c, ro_u16(buf + 2), buf[5]);
         break;
-    case 0x141: {  // ZC_COUPLESTATUS: <type>.L <base>.L <bonus>.L
+    case RO_HEADER_ZC_COUPLESTATUS: {  // <type>.L <base>.L <bonus>.L
         uint32_t type, base;
         memcpy(&type, buf + 2, 4);
         memcpy(&base, buf + 6, 4);
         ro_set_status(c, (int)type, base);
         break;
     }
-    case 0x13a: c->attack_range = ((const RO_PACKET_ZC_ATTACK_RANGE*)buf)->currentAttRange; break;
-    case 0x0cf1: {  // ZC_LOCKSTEP_DONE <step>.L <tick>.L: the step has been sent in full
+    case RO_HEADER_ZC_ATTACK_RANGE: c->attack_range = ((const RO_PACKET_ZC_ATTACK_RANGE*)buf)->currentAttRange; break;
+    // Status icons, the bot's own: <efst>.W <id>.L <on>.B, then the times as the client version has them.
+#ifdef RO_TYPE_status_changeType
+    case RO_TYPE_status_changeType:  // ZC_MSG_STATE_CHANGE3: <total>.L <left>.L <val>.3L
+        if (ro_u32(buf + 4) == c->aid) ro_effect_set(c, ro_u16(buf + 2), buf[8], ro_u32(buf + 9), ro_u32(buf + 13));
+        break;
+#endif
+#ifdef RO_TYPE_status_change2Type
+    case RO_TYPE_status_change2Type:  // ZC_MSG_STATE_CHANGE2: <left>.L <val>.3L
+        if (ro_u32(buf + 4) == c->aid) ro_effect_set(c, ro_u16(buf + 2), buf[8], 0, ro_u32(buf + 9));
+        break;
+#endif
+#ifdef RO_TYPE_status_change_endType
+    case RO_TYPE_status_change_endType:  // ZC_MSG_STATE_CHANGE: no times (an end, or timers off)
+        if (ro_u32(buf + 4) == c->aid) ro_effect_set(c, ro_u16(buf + 2), buf[8], 0, 0);
+        break;
+#endif
+#ifdef RO_HEADER_ZC_STATE_CHANGE
+    case RO_HEADER_ZC_STATE_CHANGE: {  // <id>.L <body>.W <health>.W <option>.L <pk>.B, for anyone in sight
+        uint32_t id = ro_u32(buf + 2);
+        int16_t opt1 = (int16_t)ro_u16(buf + 6), opt2 = (int16_t)ro_u16(buf + 8);
+        int32_t option = (int32_t)ro_u32(buf + 10);
+        RoUnit* u = id == c->aid ? NULL : ro_unit_find(c, id);
+        if (id == c->aid) {
+            c->opt1 = opt1;
+            c->opt2 = opt2;
+            c->option = option;
+        } else if (u) {
+            u->opt1 = opt1;
+            u->opt2 = opt2;
+            u->option = option;
+        }
+        break;
+    }
+#endif
+    case RO_ZC_LOCKSTEP_DONE: {  // <step>.L <tick>.L: the step has been sent in full
         uint32_t tick;
         memcpy(&c->steps_done, buf + 2, 4);
         memcpy(&tick, buf + 6, 4);
@@ -1035,7 +1176,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         c->lockstep_joined = 1;
         break;
     }
-    case 0x8e: case 0x8d: case 0x9a: case 0x2c1:  // chat, broadcasts, NPC talk
+    case 0x8e: case 0x8d: case 0x9a: case 0x2c1:  // chat, broadcasts, NPC talk (the same ids in every version)
         if (c->verbose) {
             int off = cmd == 0x8d || cmd == 0x2c1 ? 8 : 4;
             if (cmd == 0x2c1) off = 12;

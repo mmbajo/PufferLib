@@ -6,10 +6,10 @@ account already uses; job output and server logs go to `~/ragnarok/train/logs`.
 
 | File | What |
 |---|---|
-| `world.sh` | Library sourced by the jobs: one MariaDB per job, then any number of worlds, each with its own ports (7000+10W, 7001+10W, 7002+10W on 127.0.0.1), database and bot accounts. Passwords are random per job and never printed. |
+| `world.sh` | Library sourced by the jobs: one MariaDB per job, then any number of worlds, each with its own ports (7000+10W, 7001+10W, 7002+10W on 127.0.0.1), database and bot accounts. Passwords are random per job and never printed. The jobs take the rAthena build from `RATHENA` (default `~/ragnarok/rathena-re`, client 20221005 with renewal rules), lean worlds take their monsters from its rules (`npc/pre-re` or `npc/re`), and `world_check_client` stops a job whose bot client speaks another version or rule set. |
 | `test-bot.sbatch NBOTS MINUTES DIE_AFTER` | One world with scripted bots; the first bot is a GM and types `@die` once. `MODE=lockstep` (pass `--export=ALL,MODE=lockstep`) uses the lockstep build. |
 | `bench-worlds.sbatch NWORLDS NBOTS MINUTES RESET` | Lean lockstep worlds side by side, for throughput. Give it 2 CPUs per world plus a few (`./submit.sh -c 20 ...` for 8 worlds). |
-| `build-train.sbatch` | Builds `~/ragnarok/rathena-train` (branch `local/lockstep`): the play server's client version plus the lockstep patch and 8192 connections per server. |
+| `build-train.sbatch` | Builds `~/ragnarok/rathena-re` (branch `local/lockstep`): client 20221005 with renewal rules, plus the lockstep patch and 8192 connections per server. `--export=ALL,RATHENA=<dir>,PACKETVER=<date>,PRERE=yes` builds another checkout, version or pre-renewal (`~/ragnarok/rathena-train`: 20130618 pre-renewal). |
 | `env-check.sbatch NBOTS STEPS [ACTION_REPEAT]` | The PufferLib env without the trainer (`ocean/ragnarok/ragnarok_check`): random actions, then the scripted policy on each task through the env's own actions. |
 | `world-age.sbatch NBOTS ROUNDS [TASK]` | Does a world change as it ages? The scripted policy plays ROUNDS rounds of 10 game minutes on one world, each on fresh accounts, and the field's monster census is printed. |
 | `build-env.sbatch` | Builds the env's trainer (for H100) and `--cpu` binary in the toolchain container on a CPU node, to catch compile errors before a GPU job. |
@@ -20,7 +20,7 @@ The scripts that lean worlds load are in `../server/npc/`:
 
 - `rl_train.txt`: `@rlreset <task>`, the episode reset, and the list of task maps (`RG_TASK_MAPS` in
   `world.sh` is the same list, for the maps a lean world loads);
-- `field_dense.txt`: extra monsters on the training field;
+- `rl_spawns.txt`: extra monsters on the task maps (the training field, and Spores on `pay_fild01`);
 - `rl_census.txt`: every 10 game minutes, each task map's monster count and its monsters in a 4x4
   grid, in the map server's log;
 - `rl_spread.txt`: every 5 game minutes, a fifth of each task map's idle monsters move to random

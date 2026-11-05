@@ -9,7 +9,8 @@
 # random per job and never printed. Logs are copied to $WORLD_LOGS when the world stops.
 # WORLD_MAP_CONF holds extra map-server settings, one per line (e.g. "lockstep: yes").
 # WORLD_LEAN=1 loads only the maps in WORLD_MAPS (default: the start point's), their monsters and
-# server/npc/*.txt (with @rlreset <task>).
+# server/npc/*.txt (with @rlreset <task>). The monsters come from npc/pre-re or npc/re, by the rules
+# $RATHENA was built with; world_check_client says whether the bot client speaks that build.
 
 RO=/home/user02198/ragnarok
 RG=${RG:-$RO/PufferLib/ocean/ragnarok}  # this env's directory: server/npc, client/
@@ -28,11 +29,32 @@ WORLD_DB_NAME=ro-wdb-$SLURM_JOB_ID
 WORLD_START_POINT=${WORLD_START_POINT:-prt_fild08,200,200}
 WORLD_START_ITEMS=${WORLD_START_ITEMS:-1207,1,2:2301,1,16:501,30,0}
 # Every training task's map, for lean training worlds; server/npc/rl_train.txt lists the same maps.
-RG_TASK_MAPS="prt_fild08 pay_fild01 pay_fild02 mjolnir_01 prt_fild03"
+RG_TASK_MAPS="prt_fild08 pay_fild01 moc_fild02 mjolnir_01 pay_fild07"
 WORLD_PIDS=()
 
 wlog() {
     echo "$(date '+%F %T') $*"
+}
+
+# The client version and rules (pre-re or re) $RATHENA was configured with, from its Makefile.
+world_packetver() {
+    grep -o -- '-DPACKETVER=[0-9]*' $RATHENA/src/map/Makefile | head -1 | cut -d= -f2
+}
+
+world_rules() {
+    if grep -q -- '-DPRERE' $RATHENA/src/map/Makefile; then echo pre-re; else echo re; fi
+}
+
+# Fails, saying why, when the bot client's packet table is for another version or rules than $RATHENA.
+world_check_client() {
+    local hdr=$RG/client/rathena_packets.h ver renewal want_renewal
+    ver=$(awk '$2 == "RO_PACKETVER" {print $3}' $hdr)
+    renewal=$(awk '$2 == "RO_RENEWAL" {print $3}' $hdr)
+    want_renewal=$([ "$(world_rules)" = re ] && echo 1 || echo 0)
+    if [ "$ver" != "$(world_packetver)" ] || [ "${renewal:-0}" != "$want_renewal" ]; then
+        wlog "the bot client speaks $ver $([ "${renewal:-0}" = 1 ] && echo re || echo pre-re), but $RATHENA is built for $(world_packetver) $(world_rules): regenerate client/rathena_packets.h or set RATHENA"
+        return 1
+    fi
 }
 
 world_secret() {
@@ -92,15 +114,16 @@ world_create() {
         # Lean world: only the maps in WORLD_MAPS (default: the start point's), their monsters
         # (rAthena's spawn lines for them plus server/npc/*.txt) and the training script, instead
         # of 1265 maps and every NPC.
-        local maps=${WORLD_MAPS:-${WORLD_START_POINT%%,*}} m
+        local maps=${WORLD_MAPS:-${WORLD_START_POINT%%,*}} m rules
+        rules=$(world_rules)
         rm $dir/conf/maps_athena.conf
         for m in $maps; do echo "map: $m"; done > $dir/conf/maps_athena.conf
-        mkdir -p $dir/npc/pre-re
-        for m in $maps; do grep -h "^$m," $RATHENA/npc/pre-re/mobs/fields/*.txt; done > $dir/npc/field_mobs.txt
+        mkdir -p $dir/npc/$rules
+        for m in $maps; do grep -h "^$m," $RATHENA/npc/$rules/mobs/fields/*.txt; done > $dir/npc/field_mobs.txt
         {
             echo "npc: npc/field_mobs.txt"
             for f in $RG/server/npc/*.txt; do echo "npc: $f"; done
-        } > $dir/npc/pre-re/scripts_main.conf
+        } > $dir/npc/$rules/scripts_main.conf
     else
         ln -s $RATHENA/npc $dir/npc
     fi
@@ -157,8 +180,8 @@ EOF
     {
         echo "CREATE DATABASE $dbname;"
         echo "USE $dbname;"
-        echo "SOURCE $RATHENA/sql-files/main.sql;"
-        echo "SOURCE $RATHENA/sql-files/logs.sql;"
+        # Through stdin rather than SOURCE: the MariaDB container sees only home, not every $RATHENA.
+        cat $RATHENA/sql-files/main.sql $RATHENA/sql-files/logs.sql
         echo "UPDATE login SET user_pass = '$inter_pw' WHERE account_id = 1 AND userid = 's1';"
         echo "GRANT ALL ON $dbname.* TO 'ragnarok'@'127.0.0.1';"
         local total=$((nbots * WORLD_ACCOUNT_BLOCKS))
@@ -223,11 +246,30 @@ world_alive() {
     done
 }
 
+# True while process $1 runs (a child that exited stays a zombie until waited for).
+world_running() {
+    [ -r /proc/$1/status ] && ! grep -q '^State:[[:space:]]*Z' /proc/$1/status 2>/dev/null
+}
+
+# Stops process $1 with TERM, and with KILL if it is still running after WORLD_STOP_WAIT seconds:
+# a lockstep map server has been seen to spin forever while kicking its last players at shutdown.
+world_stop() {
+    local pid=$1 deadline=$((SECONDS + ${WORLD_STOP_WAIT:-30}))
+    kill -TERM $pid 2>/dev/null
+    while world_running $pid && [ $SECONDS -lt $deadline ]; do
+        sleep 0.2
+    done
+    if world_running $pid; then
+        wlog "process $pid ($(ps -o comm= -p $pid)) did not stop in ${WORLD_STOP_WAIT:-30}s; killing it"
+        kill -KILL $pid 2>/dev/null
+    fi
+    wait $pid 2>/dev/null
+}
+
 world_stop_all() {
     local pid d
     for ((i = ${#WORLD_PIDS[@]} - 1; i >= 0; i--)); do
-        kill -TERM ${WORLD_PIDS[$i]} 2>/dev/null
-        wait ${WORLD_PIDS[$i]} 2>/dev/null
+        world_stop ${WORLD_PIDS[$i]}
     done
     WORLD_PIDS=()
     for d in $WORLD_ROOT/w*; do
