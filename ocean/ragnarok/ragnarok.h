@@ -193,7 +193,7 @@ struct Env {
     float reward_scale, reward_job, reward_death;
     float task_weight[RG_NTASKS];
     int curriculum;
-    float curriculum_floor, curriculum_unlock, curriculum_fast, curriculum_slow;
+    float curriculum_floor, curriculum_unlock, curriculum_fast, curriculum_slow, curriculum_patience;
     unsigned int seed;
     double next_step;  // real time: when the current step ends
     unsigned char* nav_reached;  // navigation's search: cells within RG_NAV_MAX of a bot
@@ -216,7 +216,8 @@ static void rg_die(const char* fmt, const char* a, const char* b) {
 // The curriculum (curriculum = 1). The task weights then say only which tasks are in the mix and how
 // much each counts; one sampler, shared by every env of the process, picks each episode's task:
 // - a task unlocks, for good, once each task it builds on (RG_TASK_NEEDS) that is in the mix averages
-//   perf >= curriculum_unlock;
+//   perf >= curriculum_unlock, or has had curriculum_patience episodes (so a task that levels off
+//   below the bar does not lock out the ones after it);
 // - unlocked tasks are drawn in proportion to their learning progress, |fast - slow| for two moving
 //   averages of their perf over episodes (rates curriculum_fast and curriculum_slow), times their
 //   weight, and each gets at least curriculum_floor of the episodes.
@@ -243,7 +244,8 @@ static void rg_task_chances(Env* env, float* p) {
             int ready = 1;
             for (int need = 0; need < RG_NTASKS; need++)
                 if ((RG_TASK_NEEDS[t] >> need & 1) && env->task_weight[need] > 0
-                    && !(k->unlocked[need] && k->episodes[need] > 0 && k->slow[need] >= env->curriculum_unlock))
+                    && !(k->unlocked[need] && k->episodes[need] > 0
+                         && (k->slow[need] >= env->curriculum_unlock || k->episodes[need] >= env->curriculum_patience)))
                     ready = 0;
             k->unlocked[t] |= ready;
             if (!k->unlocked[t]) {
@@ -771,6 +773,7 @@ void puf_init(Env* env, Dict* kwargs) {
     env->curriculum = dict_get(kwargs, "curriculum");
     env->curriculum_floor = dict_get(kwargs, "curriculum_floor");
     env->curriculum_unlock = dict_get(kwargs, "curriculum_unlock");
+    env->curriculum_patience = dict_get(kwargs, "curriculum_patience");
     env->curriculum_fast = dict_get(kwargs, "curriculum_fast");
     env->curriculum_slow = dict_get(kwargs, "curriculum_slow");
     env->seed = 12345u + 7919u * env->rng;

@@ -204,6 +204,7 @@ int main(int argc, char** argv) {
     dict_set(&kw, "curriculum", !strcmp(task, "curriculum"));
     dict_set(&kw, "curriculum_floor", 0.05);
     dict_set(&kw, "curriculum_unlock", 0.8);
+    dict_set(&kw, "curriculum_patience", 20000);
     dict_set(&kw, "curriculum_fast", 0.002);
     dict_set(&kw, "curriculum_slow", 0.0002);
     Env env;

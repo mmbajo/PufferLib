@@ -27,8 +27,8 @@ one GPU job on one node
   - Each episode, a bot draws a task (`taskN_weight`), and `@rlreset <task>` sets up its character:
     job, levels, stats, skills, gear and map.
   - With `curriculum = 1`, one sampler per trainer process draws the tasks instead. A task unlocks
-    once the tasks it builds on reach perf 0.8 (the class skills and navigation build on field
-    leveling, survival on the Swordman skills). Unlocked tasks are drawn by learning progress
+    once the tasks it builds on reach perf 0.8, or have had 20,000 episodes (the class skills and
+    navigation build on field leveling, survival on the Swordman skills). Unlocked tasks are drawn by learning progress
     (how fast their perf is changing), each keeping at least 5% of the episodes. The logs show each
     task's chance of being drawn as `<task>_chance`.
   - The observation starts with a goal vector (task, difficulty, job) and then describes:
