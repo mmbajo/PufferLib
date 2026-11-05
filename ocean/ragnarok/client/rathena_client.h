@@ -186,6 +186,10 @@ typedef struct RoClient {
     int16_t opt1, opt2;        // the bot's body and health state, as for units
     int32_t option;
 
+    char message[96];          // the last message the server wrote to this character (ZC_NOTIFY_PLAYERCHAT)
+    uint32_t died[8];          // the last units seen dying, newest at died[ndied % 8 - 1]
+    int ndied;
+
     // World around it.
     RoUnit units[RO_MAX_UNITS];
     int nunits;
@@ -742,6 +746,13 @@ RO_API RoUnit* ro_unit_find(RoClient* c, uint32_t id) {
     return NULL;
 }
 
+// Whether the unit was among the last 8 seen dying.
+RO_API int ro_unit_died(const RoClient* c, uint32_t id) {
+    for (int i = 0; i < 8 && i < c->ndied; i++)
+        if (c->died[i] == id) return 1;
+    return 0;
+}
+
 RO_API RoUnit* ro_unit_upsert(RoClient* c, uint32_t id) {
     RoUnit* u = ro_unit_find(c, id);
     if (u) return u;
@@ -914,6 +925,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         }
         RoUnit* u = ro_unit_find(c, p->gid);
         if (u && p->type == 1 && u->type == RO_OBJ_MOB && u->hit_by_me) c->kills++;
+        if (p->type == 1) c->died[c->ndied++ % 8] = p->gid;
         ro_unit_remove(c, p->gid);
         break;
     }
@@ -1177,6 +1189,7 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         break;
     }
     case 0x8e: case 0x8d: case 0x9a: case 0x2c1:  // chat, broadcasts, NPC talk (the same ids in every version)
+        if (cmd == 0x8e && len > 4) snprintf(c->message, sizeof c->message, "%.*s", len - 4, (const char*)buf + 4);
         if (c->verbose) {
             int off = cmd == 0x8d || cmd == 0x2c1 ? 8 : 4;
             if (cmd == 0x2c1) off = 12;

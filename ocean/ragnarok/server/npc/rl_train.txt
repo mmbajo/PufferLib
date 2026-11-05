@@ -24,6 +24,10 @@
 //      200,000 zeny to pay for it, Enlarge Weight Limit 5, Discount 3, Overcharge 3, Axe, Padded
 //      Armor; mjolnir_01
 //   8  navigation: the field leveling Novice; the env picks the cell to walk to
+//   9  mini-boss: one of the six class setups above (1, 3 to 7), drawn at random, and a boss spawned
+//      4 to 7 cells away: Toad (level 27), Eclipse (31), Vocal (18, armored), Mastering (42) or
+//      Dragon Fly (47). The bot is told the boss's id by a message, "rlboss <id>", and the next
+//      reset removes a boss still alive.
 // Each gets 30 Red Potions (survival 10). $@rl_maps$ lists every task's map for the other training
 // scripts (rl_spread.txt, rl_census.txt); RG_TASK_MAPS in slurm/world.sh is the same list.
 -	script	rl_train	-1,{
@@ -34,6 +38,17 @@ OnInit:
 
 OnReset:
 	.@task = atoi(.@atcmd_parameters$[0]);
+	if (@rl_boss) {
+		if (unitexists(@rl_boss))
+			unitkill @rl_boss;
+		@rl_boss = 0;
+	}
+	// The mini-boss task uses a class task's setup.
+	.@setup = .@task;
+	if (.@task == 9) {
+		setarray .@classes[0], 1, 3, 4, 5, 6, 7;
+		.@setup = .@classes[rand(6)];
+	}
 	recovery 0;
 	sc_end SC_ALL;
 	clearitem;
@@ -41,7 +56,7 @@ OnReset:
 	// spends the points a reset gives by the env's fixed rule), skills (id, level), weapon and armor.
 	.@level = 25;
 	.@potions = 30;
-	switch (.@task) {
+	switch (.@setup) {
 	case 1:
 		.@job = Job_Swordman;
 		setarray .@stat[0], 50, 30, 30, 1, 20, 1;
@@ -133,5 +148,23 @@ OnReset:
 	getitem 501, .@potions;
 	percentheal 100, 100;
 	warp .@map$, 0, 0;
+	if (.@task == 9) {
+		setarray .@bosses[0], 1089, 1093, 1088, 1090, 1091;
+		getmapxy(.@m$, .@x, .@y, BL_PC);
+		.@bx = .@x;
+		.@by = .@y;
+		for (.@i = 0; .@i < 50; .@i++) {
+			.@tx = .@x + rand(-7, 7);
+			.@ty = .@y + rand(-7, 7);
+			if (distance(.@x, .@y, .@tx, .@ty) >= 4 && checkcell(.@m$, .@tx, .@ty, cell_chkpass)) {
+				.@bx = .@tx;
+				.@by = .@ty;
+				break;
+			}
+		}
+		monster .@m$, .@bx, .@by, "--ja--", .@bosses[rand(5)], 1;
+		@rl_boss = $@mobid[0];
+		message strcharinfo(0), "rlboss " + @rl_boss;
+	}
 	end;
 }
