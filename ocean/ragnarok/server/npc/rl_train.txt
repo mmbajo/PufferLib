@@ -2,22 +2,24 @@
 // @rlreset <task> turns the caller into a fresh character for one episode of that task: alive with
 // full HP and SP, no status effects, the task's job, levels, stats, skills and gear, then a random
 // cell of the task's map. train/world.sh loads this only into throwaway training worlds, where every
-// bot may use it. Tasks (the env's RG_TASK_* in PufferLib/ocean/ragnarok/ragnarok.h):
+// bot may use it. The maps and levels are for renewal rules (monster levels as in rAthena's db/re).
+// Tasks (the env's RG_TASK_* in PufferLib/ocean/ragnarok/ragnarok.h):
 //   0  field leveling: Novice, levels 1/1, Main Gauche, Cotton Shirt; prt_fild08
 //   1  Swordman skills: Swordman, levels 25/25, STR 50 AGI 30 VIT 30 DEX 20, Bash 10, Magnum
-//      Break 5, Sword Mastery 10, Increase HP Recovery 5, Blade, Padded Armor; pay_fild01 (Spores)
+//      Break 5, Sword Mastery 10, Increase HP Recovery 5, Blade, Padded Armor; pay_fild01 (Spores,
+//      level 18, from rl_spawns.txt)
 //   2  survival: a weaker Swordman (levels 18/18, STR 35 AGI 20 VIT 15 DEX 15, the same skills and
-//      gear, 10 Red Potions) on pay_fild02 among Wolves (level 25), which help each other
+//      gear, 10 Red Potions) on moc_fild02 among Peco Pecos (level 25), which help each other
 //   3  Mage skills: Mage, levels 25/25, INT 50 DEX 35 VIT 25 AGI 20, Fire, Cold and Lightning Bolt 5,
 //      Soul Strike 3, Napalm Beat 3, Fire Ball 1, Frost Diver 1, Increase SP Recovery 3, Rod, Silk
-//      Robe; mjolnir_01 (mostly earth monsters, weak to fire: Coco, Caramel, Horn; some wind)
+//      Robe; mjolnir_01 (mostly Caramels, earth and weak to fire; some wind: Stainer, Creamy)
 //   4  Archer skills: Archer, levels 25/25, DEX 50 AGI 35 VIT 25 STR 20, Double Strafe 10, Arrow
-//      Shower 5, Owl's Eye 5, Vulture's Eye 5, Bow and 2,000 Arrows, Cotton Shirt; prt_fild03 (Yoyo,
-//      Smokie)
+//      Shower 5, Owl's Eye 5, Vulture's Eye 5, Bow and 2,000 Arrows, Cotton Shirt; pay_fild07
+//      (Bigfoot, Caramel, Stainer, Creamy: levels 21 to 29)
 //   5  Acolyte skills: Acolyte, levels 25/25, STR 35 VIT 35 INT 40 DEX 20, Heal 5, Blessing 5,
 //      Increase AGI 5, Divine Protection 5, Demon Bane 5, Club, Silk Robe; pay_fild01
 //   6  Thief skills: Thief, levels 25/25, STR 40 AGI 50 DEX 30 VIT 10, Double Attack 10, Improve
-//      Dodge 5, Envenom 5, Steal 3, Hiding 2, Main Gauche, Padded Armor; prt_fild03
+//      Dodge 5, Envenom 5, Steal 3, Hiding 2, Main Gauche, Padded Armor; pay_fild07
 //   7  Merchant skills: Merchant, levels 25/25, STR 50 VIT 35 DEX 30 AGI 15, Mammonite 10 and
 //      200,000 zeny to pay for it, Enlarge Weight Limit 5, Discount 3, Overcharge 3, Axe, Padded
 //      Armor; mjolnir_01
@@ -26,7 +28,7 @@
 // scripts (rl_spread.txt, rl_census.txt); RG_TASK_MAPS in slurm/world.sh is the same list.
 -	script	rl_train	-1,{
 OnInit:
-	setarray $@rl_maps$[0], "prt_fild08", "pay_fild01", "pay_fild02", "mjolnir_01", "prt_fild03";
+	setarray $@rl_maps$[0], "prt_fild08", "pay_fild01", "moc_fild02", "mjolnir_01", "pay_fild07";
 	bindatcmd "rlreset", strnpcinfo(3) + "::OnReset", 0, 99;
 	end;
 
@@ -48,14 +50,14 @@ OnReset:
 		.@map$ = "pay_fild01";
 		break;
 	case 2:
-		// Weaker than the wolves, so pulling a pack, or fighting on at low HP, gets it killed.
+		// Weaker than the Peco Pecos, so pulling a pack, or fighting on at low HP, gets it killed.
 		.@job = Job_Swordman;
 		.@level = 18;
 		.@potions = 10;
 		setarray .@stat[0], 35, 20, 15, 1, 15, 1;
 		setarray .@skill[0], 5, 10, 7, 5, 2, 10, 4, 5;
 		setarray .@gear[0], 1109, 2312;
-		.@map$ = "pay_fild02";
+		.@map$ = "moc_fild02";
 		break;
 	case 3:
 		.@job = Job_Mage;
@@ -69,7 +71,7 @@ OnReset:
 		setarray .@stat[0], 20, 35, 25, 1, 50, 1;
 		setarray .@skill[0], 46, 10, 47, 5, 43, 5, 44, 5;
 		setarray .@gear[0], 1701, 2301;
-		.@map$ = "prt_fild03";
+		.@map$ = "pay_fild07";
 		break;
 	case 5:
 		.@job = Job_Acolyte;
@@ -83,7 +85,7 @@ OnReset:
 		setarray .@stat[0], 40, 50, 10, 1, 30, 1;
 		setarray .@skill[0], 48, 10, 49, 5, 52, 5, 50, 3, 51, 2;
 		setarray .@gear[0], 1207, 2312;
-		.@map$ = "prt_fild03";
+		.@map$ = "pay_fild07";
 		break;
 	case 7:
 		.@job = Job_Merchant;

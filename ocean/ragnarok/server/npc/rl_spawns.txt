@@ -1,0 +1,11 @@
+//===== Training worlds only (local spawns, not part of rAthena) =====
+// Extra monsters on the task maps, on top of rAthena's renewal spawns there.
+// - The training field: easy monsters, about three times rAthena's pre-renewal Porings, Lunatics and
+//   Drops there (70, 40, 10), so 64 bots can share it.
+// - pay_fild01: Spores (level 18) for the Swordman and Acolyte skill tasks. Renewal moved them to
+//   pay_fild08 and left this map Willows (level 8), too low for a level-25 character, since renewal
+//   pays 85% of the exp for monsters 16 to 20 levels below it.
+prt_fild08,0,0	monster	Poring	1002,140
+prt_fild08,0,0	monster	Lunatic	1063,80
+prt_fild08,0,0	monster	Drops	1113,20
+pay_fild01,0,0	monster	Spore	1014,100

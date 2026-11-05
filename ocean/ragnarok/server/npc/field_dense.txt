@@ -1,6 +1,0 @@
-//===== Training worlds only (local spawns, not part of rAthena) =====
-// Extra easy monsters on the training field, about three times rAthena's own Porings, Lunatics
-// and Drops there (70, 40, 10), so 64 bots can share it. rAthena's spawn lines stay as well.
-prt_fild08,0,0	monster	Poring	1002,140
-prt_fild08,0,0	monster	Lunatic	1063,80
-prt_fild08,0,0	monster	Drops	1113,20

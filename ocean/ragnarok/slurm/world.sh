@@ -29,7 +29,7 @@ WORLD_DB_NAME=ro-wdb-$SLURM_JOB_ID
 WORLD_START_POINT=${WORLD_START_POINT:-prt_fild08,200,200}
 WORLD_START_ITEMS=${WORLD_START_ITEMS:-1207,1,2:2301,1,16:501,30,0}
 # Every training task's map, for lean training worlds; server/npc/rl_train.txt lists the same maps.
-RG_TASK_MAPS="prt_fild08 pay_fild01 pay_fild02 mjolnir_01 prt_fild03"
+RG_TASK_MAPS="prt_fild08 pay_fild01 moc_fild02 mjolnir_01 pay_fild07"
 WORLD_PIDS=()
 
 wlog() {

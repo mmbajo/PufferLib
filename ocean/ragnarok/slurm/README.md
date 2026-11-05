@@ -20,7 +20,7 @@ The scripts that lean worlds load are in `../server/npc/`:
 
 - `rl_train.txt`: `@rlreset <task>`, the episode reset, and the list of task maps (`RG_TASK_MAPS` in
   `world.sh` is the same list, for the maps a lean world loads);
-- `field_dense.txt`: extra monsters on the training field;
+- `rl_spawns.txt`: extra monsters on the task maps (the training field, and Spores on `pay_fild01`);
 - `rl_census.txt`: every 10 game minutes, each task map's monster count and its monsters in a 4x4
   grid, in the map server's log;
 - `rl_spread.txt`: every 5 game minutes, a fifth of each task map's idle monsters move to random
