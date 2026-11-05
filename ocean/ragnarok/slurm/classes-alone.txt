@@ -1,0 +1,6 @@
+# Each new first-class skill task alone, 300M steps (the budget per task of the G1 check).
+--env.task0_weight=0 --env.task3_weight=1 --train.total_timesteps=300000000
+--env.task0_weight=0 --env.task4_weight=1 --train.total_timesteps=300000000
+--env.task0_weight=0 --env.task5_weight=1 --train.total_timesteps=300000000
+--env.task0_weight=0 --env.task6_weight=1 --train.total_timesteps=300000000
+--env.task0_weight=0 --env.task7_weight=1 --train.total_timesteps=300000000
