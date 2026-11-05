@@ -100,6 +100,9 @@ in `ragnarok_check.c` on renewal (job 5007175).
 
 ## Results so far
 
+Everything in this section ran on pre-renewal worlds (client 20130618), before the tasks moved to
+renewal; the gates are being repeated on renewal.
+
 | Setup | Bot steps/s | Note |
 |---|---|---|
 | Real time, 4 scripted bots | 40 | 226 kills in 10 minutes |
