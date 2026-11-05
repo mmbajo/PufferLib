@@ -29,7 +29,7 @@ TIMESTEPS=${3:-400000000}
 RUNS_FILE=${4:-}
 node=$(hostname -s)
 job=$SLURM_JOB_ID
-export RATHENA=/home/user02198/ragnarok/rathena-train
+export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-train}  # or ~/ragnarok/rathena-re (renewal)
 export WORLD_LEAN=1
 export WORLD_MAP_CONF=$'lockstep: yes\nautosave_time: 3600'
 # Ports and the database port per job, so two training jobs can share a node.
@@ -45,6 +45,7 @@ PUF=${PUF:-/home/user02198/ragnarok/PufferLib}  # a frozen worktree can be passe
 export RG=$PUF/ocean/ragnarok
 source $RG/slurm/world.sh
 export WORLD_MAPS=${WORLD_MAPS:-$RG_TASK_MAPS}
+world_check_client || exit 6
 IMG=/lustre/users/user02198/ragnarok/images/puffer-cuda12.2-ubuntu22.04.sqsh
 RUN=/lustre/users/user02198/ragnarok/runs/$job
 wlog "node=$node job=$job worlds=$NWORLDS bots=$NBOTS timesteps=$TIMESTEPS runs=$nruns ports=$WORLD_PORT_BASE db=$WORLD_DB_PORT gpu=${CUDA_VISIBLE_DEVICES:-?}"

@@ -1,7 +1,9 @@
 #!/bin/bash
 # Build the training rAthena in ~/ragnarok/rathena-train (branch local/lockstep): the same client
 # version as the play server, plus the lockstep patch and room for 8192 connections per server.
-# Submit with train/submit.sh build-train.sbatch.
+# Submit with train/submit.sh build-train.sbatch. Another checkout, client version or renewal:
+# --export=ALL,RATHENA=<dir>,PACKETVER=<yyyymmdd>,PRERE=no (renewal); SCRATCH moves the build's
+# TMPDIR off the node's /tmp.
 #SBATCH --job-name=ro-build-train
 #SBATCH --partition=002-partition-cpu
 #SBATCH --cpus-per-task=16
@@ -18,14 +20,17 @@ if [ -n "$others" ]; then
     exit 3
 fi
 
-export TMPDIR=/tmp/ro-build-$SLURM_JOB_ID
+RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-train}
+PACKETVER=${PACKETVER:-20130618}
+PRERE=${PRERE:-yes}
+export TMPDIR=${SCRATCH:-/tmp}/ro-build-$SLURM_JOB_ID
 mkdir -p "$TMPDIR"
 trap 'rm -rf "$TMPDIR"' EXIT
 LOGS=/home/user02198/ragnarok/train/logs
 
-cd /home/user02198/ragnarok/rathena-train
-echo "rathena-train $(git log --oneline -1) + $(git status --short | wc -l) changed files"
-./configure --enable-epoll --enable-packetver=20130618 --enable-prere=yes --with-maxconn=8192 \
+cd $RATHENA
+echo "$(basename $RATHENA) $(git log --oneline -1) + $(git status --short | wc -l) changed files; packetver $PACKETVER, prere $PRERE"
+./configure --enable-epoll --enable-packetver=$PACKETVER --enable-prere=$PRERE --with-maxconn=8192 \
     > $LOGS/configure-$SLURM_JOB_ID.log 2>&1
 grep -E 'PACKETVER|prere|epoll|maxconn|MAXCONN' $LOGS/configure-$SLURM_JOB_ID.log | tail -6
 make clean > /dev/null 2>&1

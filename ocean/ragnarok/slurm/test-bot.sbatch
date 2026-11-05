@@ -17,7 +17,7 @@ DIE_AFTER=${3:-120}
 export WORLD_GM_BOT=1
 # MODE=lockstep: the training build (~/ragnarok/rathena-train) with the clock stepped by the bots.
 if [ "${MODE:-realtime}" = lockstep ]; then
-    export RATHENA=/home/user02198/ragnarok/rathena-train
+    export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-train}
     export WORLD_MAP_CONF=$'lockstep: yes\nlockstep_debug: yes\nautosave_time: 3600'
     BOT_FLAGS="${BOT_FLAGS:-} --lockstep"
 fi
@@ -25,6 +25,7 @@ node=$(hostname -s)
 job=$SLURM_JOB_ID
 RG=${RG:-/home/user02198/ragnarok/PufferLib/ocean/ragnarok}
 source $RG/slurm/world.sh
+world_check_client || exit 6
 wlog "node=$node job=$job mode=${MODE:-realtime} bots=$NBOTS minutes=$MINUTES rathena=$RATHENA $(git -C $RATHENA log --oneline -1 | cut -c1-50)"
 
 # Leave if an older job of this account holds the node (another program's job, or a test that

@@ -9,7 +9,8 @@
 # random per job and never printed. Logs are copied to $WORLD_LOGS when the world stops.
 # WORLD_MAP_CONF holds extra map-server settings, one per line (e.g. "lockstep: yes").
 # WORLD_LEAN=1 loads only the maps in WORLD_MAPS (default: the start point's), their monsters and
-# server/npc/*.txt (with @rlreset <task>).
+# server/npc/*.txt (with @rlreset <task>). The monsters come from npc/pre-re or npc/re, by the rules
+# $RATHENA was built with; world_check_client says whether the bot client speaks that build.
 
 RO=/home/user02198/ragnarok
 RG=${RG:-$RO/PufferLib/ocean/ragnarok}  # this env's directory: server/npc, client/
@@ -33,6 +34,27 @@ WORLD_PIDS=()
 
 wlog() {
     echo "$(date '+%F %T') $*"
+}
+
+# The client version and rules (pre-re or re) $RATHENA was configured with, from its Makefile.
+world_packetver() {
+    grep -o -- '-DPACKETVER=[0-9]*' $RATHENA/src/map/Makefile | head -1 | cut -d= -f2
+}
+
+world_rules() {
+    if grep -q -- '-DPRERE' $RATHENA/src/map/Makefile; then echo pre-re; else echo re; fi
+}
+
+# Fails, saying why, when the bot client's packet table is for another version or rules than $RATHENA.
+world_check_client() {
+    local hdr=$RG/client/rathena_packets.h ver renewal want_renewal
+    ver=$(awk '$2 == "RO_PACKETVER" {print $3}' $hdr)
+    renewal=$(awk '$2 == "RO_RENEWAL" {print $3}' $hdr)
+    want_renewal=$([ "$(world_rules)" = re ] && echo 1 || echo 0)
+    if [ "$ver" != "$(world_packetver)" ] || [ "${renewal:-0}" != "$want_renewal" ]; then
+        wlog "the bot client speaks $ver $([ "${renewal:-0}" = 1 ] && echo re || echo pre-re), but $RATHENA is built for $(world_packetver) $(world_rules): regenerate client/rathena_packets.h or set RATHENA"
+        return 1
+    fi
 }
 
 world_secret() {
@@ -92,15 +114,16 @@ world_create() {
         # Lean world: only the maps in WORLD_MAPS (default: the start point's), their monsters
         # (rAthena's spawn lines for them plus server/npc/*.txt) and the training script, instead
         # of 1265 maps and every NPC.
-        local maps=${WORLD_MAPS:-${WORLD_START_POINT%%,*}} m
+        local maps=${WORLD_MAPS:-${WORLD_START_POINT%%,*}} m rules
+        rules=$(world_rules)
         rm $dir/conf/maps_athena.conf
         for m in $maps; do echo "map: $m"; done > $dir/conf/maps_athena.conf
-        mkdir -p $dir/npc/pre-re
-        for m in $maps; do grep -h "^$m," $RATHENA/npc/pre-re/mobs/fields/*.txt; done > $dir/npc/field_mobs.txt
+        mkdir -p $dir/npc/$rules
+        for m in $maps; do grep -h "^$m," $RATHENA/npc/$rules/mobs/fields/*.txt; done > $dir/npc/field_mobs.txt
         {
             echo "npc: npc/field_mobs.txt"
             for f in $RG/server/npc/*.txt; do echo "npc: $f"; done
-        } > $dir/npc/pre-re/scripts_main.conf
+        } > $dir/npc/$rules/scripts_main.conf
     else
         ln -s $RATHENA/npc $dir/npc
     fi

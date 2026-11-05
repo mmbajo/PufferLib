@@ -18,13 +18,14 @@ ROUNDS=${2:-50}
 TASK=${3:-0}
 node=$(hostname -s)
 job=$SLURM_JOB_ID
-export RATHENA=/home/user02198/ragnarok/rathena-train
+export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-train}  # or ~/ragnarok/rathena-re (renewal)
 export WORLD_LEAN=1
 export WORLD_ACCOUNT_BLOCKS=$((ROUNDS + 2))
 export WORLD_MAP_CONF=$'lockstep: yes\nautosave_time: 3600'
 RG=${RG:-/home/user02198/ragnarok/PufferLib/ocean/ragnarok}
 source $RG/slurm/world.sh
 export WORLD_MAPS=${WORLD_MAPS:-$RG_TASK_MAPS}
+world_check_client || exit 6
 wlog "node=$node job=$job bots=$NBOTS rounds=$ROUNDS task=$TASK"
 others=$(squeue -u "$USER" -h -w "$node" -o %i | grep -vx "$job" | awk -v j=$job '$1 + 0 < j + 0')
 if [ -n "$others" ]; then
