@@ -16,7 +16,7 @@
 //             Bolt on water, Soul Strike on ghosts, else Fire Bolt); when hit or the monster is
 //             close, the quick Soul Strike or Napalm Beat; sit when SP runs low
 //   Archer    Double Strafe the target within 9 cells, Arrow Shower when 3 monsters are close
-//   Acolyte   Heal itself below 50% HP; Blessing and Increase AGI every 2 minutes
+//   Acolyte   Heal itself below 50% HP; Blessing and Increase AGI whenever they have run out
 //   Merchant  Mammonite the target next to the bot
 //   Thief     Envenom the target next to the bot
 // In the navigation task it only walks: every 3 steps, or when it has stopped, toward the cell of its
@@ -30,16 +30,14 @@ static int skill_index(int id) {
     return -1;
 }
 
-// A scripted bot's memory: its heading while walking on, and when it last cast each buff, in world
-// steps.
+// A scripted bot's memory: its heading while walking on.
 typedef struct {
     int heading;
-    long blessed_at, agi_at;
 } Script;
 
 static int job_of(const float* goal) {
     for (int j = 0; j < 8; j++)
-        if (goal[RG_TASKS_MAX + 4 + j] > 0) return j;
+        if (goal[RG_GOAL_JOB + j] > 0) return j;
     return 0;
 }
 
@@ -143,10 +141,12 @@ static void scripted(const float* o, float* a, Script* st, long now) {
         if (near >= 3 && ready(skills, shower)) skill = shower;
         else if (mobs[0] > 0 && dist <= 9 && ready(skills, strafe)) skill = strafe;
     } else if (job == 4) {
+        // Blessing and Increase AGI are the first two effects the bot sees on itself.
+        const float* effects = o + RG_OBS_EFFECTS;
         int heal = skill_index(28), bless = skill_index(34), agi = skill_index(29);
         if (hp < 0.5f && ready(skills, heal)) skill = heal;
-        else if (now - st->blessed_at > 1200 && ready(skills, bless)) skill = bless;
-        else if (now - st->agi_at > 1200 && ready(skills, agi)) skill = agi;
+        else if (effects[0] <= 0 && ready(skills, bless)) skill = bless;
+        else if (effects[RG_EFFECT_F] <= 0 && ready(skills, agi)) skill = agi;
     } else if (job == 5 || job == 6) {
         int k = skill_index(job == 5 ? 42 : 52);
         if (mobs[0] > 0 && dist <= 1.5f && ready(skills, k)) skill = k;
@@ -164,8 +164,6 @@ static void scripted(const float* o, float* a, Script* st, long now) {
         a[0] = RG_WAIT;  // moving would break the cast
     } else if (skill >= 0) {
         a[0] = RG_SKILL; a[2] = 0; a[3] = skill;
-        if (skill == skill_index(34)) st->blessed_at = now;
-        if (skill == skill_index(29)) st->agi_at = now;
     } else if (self[11]) {
         a[0] = RG_WAIT;  // already attacking
     } else if (mobs[0] > 0 && job == 2) {
@@ -230,7 +228,6 @@ int main(int argc, char** argv) {
     printf("reset in %.1f s\n", (ro_ms() - t) / 1000);
     double ret = 0;
     Script* script = (Script*)calloc(n, sizeof(Script));
-    for (int i = 0; i < n; i++) script[i].blessed_at = script[i].agi_at = -100000;
     long masked_violations = 0;
     t = ro_ms();
     for (int s = 0; s < steps / repeat; s++) {

@@ -23,8 +23,9 @@
 // (1.0 = as good as it), logged per task. Navigation pays and scores the way to its target instead
 // (see RG_NAV_MIN).
 //
-// Layout v2 is fixed (changing it invalidates checkpoints), so it has spare room; see the RG_OBS_*
-// offsets. Actions: verb, direction (for move), slot (a monster or item slot, for attack, pick up and
+// Layout v3 is fixed (changing it invalidates checkpoints), so it has spare room; see the RG_OBS_*
+// offsets. v3 added the effects on the bot (status icons and ailments), monsters' ailments, more
+// difficulty values and a spare block. Actions: verb, direction (for move), slot (a monster or item slot, for attack, pick up and
 // targeted skills) and skill (an index into RG_SKILLS). Attacking and picking up go on over the next
 // steps: the env walks the bot into range first, since rAthena never walks a player there. A skill
 // on a monster does not start an attack. The monster last attacked or cast at stays in slot 0, so
@@ -48,7 +49,7 @@ typedef float obs_t;
 
 #define RG_TASKS_MAX 16  // goal one-hot width, with room for later tasks
 // Field leveling (a Novice), the first classes' skills (each at levels 25/25, on a field for its
-// level), survival (a weak Swordman among wolves) and navigation (a Novice walking to a target cell);
+// level), survival (a weak Swordman among Peco Pecos) and navigation (a Novice walking to a target cell);
 // server/npc/rl_train.txt sets each one up.
 enum {
     RG_TASK_FIELD, RG_TASK_SWORD_SKILLS, RG_TASK_SURVIVAL, RG_TASK_MAGE_SKILLS, RG_TASK_ARCHER_SKILLS,
@@ -82,34 +83,52 @@ static const unsigned RG_TASK_NEEDS[RG_NTASKS] = {0, 1u << RG_TASK_FIELD, 1u << 
                                                   1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD,
                                                   1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD};
 
-// ---- layout v2 -------------------------------------------------------------------------------
+// ---- layout v3 -------------------------------------------------------------------------------
 
 #define RG_VIEW 15
 #define RG_MOBS 8
 #define RG_ITEMS 4
 #define RG_NSKILLS 24
 #define RG_PARTY 6
+#define RG_EFFECTS 32  // effects on the bot it can see: RG_EFFECT_EFST, then the ailments, then room
 #define RG_SIGHT 14.0f
 
-#define RG_GOAL_F (RG_TASKS_MAX + 4 + 8)  // task one-hot, 4 difficulty values, job one-hot
-#define RG_SELF_F 20
+#define RG_GOAL_DIFF 8                          // the task's difficulty values
+#define RG_GOAL_JOB (RG_TASKS_MAX + RG_GOAL_DIFF)  // where the job one-hot starts
+#define RG_GOAL_F (RG_GOAL_JOB + 8)             // task one-hot, difficulty values, job one-hot
+#define RG_SELF_F 24
 #define RG_CAST_F 4
+#define RG_EFFECT_F 2  // on, and the share of its time left
 #define RG_SKILL_F 5
-#define RG_MOB_F 21
+#define RG_MOB_F 27
 #define RG_ITEM_F 4
 #define RG_PARTY_F 4
 #define RG_DIALOG_F 8
+#define RG_SPARE_F 32  // room for inputs to come
 
 #define RG_OBS_GOAL 0
 #define RG_OBS_SELF (RG_OBS_GOAL + RG_GOAL_F)
 #define RG_OBS_CAST (RG_OBS_SELF + RG_SELF_F)
-#define RG_OBS_VIEW (RG_OBS_CAST + RG_CAST_F)
+#define RG_OBS_EFFECTS (RG_OBS_CAST + RG_CAST_F)
+#define RG_OBS_VIEW (RG_OBS_EFFECTS + RG_EFFECTS * RG_EFFECT_F)
 #define RG_OBS_SKILLS (RG_OBS_VIEW + RG_VIEW * RG_VIEW)
 #define RG_OBS_MOBS (RG_OBS_SKILLS + RG_NSKILLS * RG_SKILL_F)
 #define RG_OBS_ITEMS (RG_OBS_MOBS + RG_MOBS * RG_MOB_F)
 #define RG_OBS_PARTY (RG_OBS_ITEMS + RG_ITEMS * RG_ITEM_F)
 #define RG_OBS_DIALOG (RG_OBS_PARTY + RG_PARTY * RG_PARTY_F)
-#define OBS_SIZE (RG_OBS_DIALOG + RG_DIALOG_F)
+#define RG_OBS_SPARE (RG_OBS_DIALOG + RG_DIALOG_F)
+#define OBS_SIZE (RG_OBS_SPARE + RG_SPARE_F)
+
+// The status icons the bot sees on itself (rAthena's EFST_* ids), each as on and the share of its
+// time left; then the ailments the server shows as body and health states (on only), the same for
+// itself and for each monster.
+#define RG_EFFECT_ICONS 16
+static const int RG_EFFECT_EFST[RG_EFFECT_ICONS] = {
+    10, 12, 3, 1, 4,     // Blessing, Increase AGI, Improve Concentration, Endure, Hiding
+    9, 0, 13, 8, 11,     // Angelus, Provoke, Decrease AGI, Quagmire, Signum Crucis
+    15, 19, 25, 30, 37,  // Impositio Manus, Kyrie Eleison, Over Thrust, Loud Exclamation, a speed potion
+    46};                 // the after-cast delay of the skills that show it
+enum { RG_AIL_STONE, RG_AIL_FREEZE, RG_AIL_STUN, RG_AIL_SLEEP, RG_AIL_POISON, RG_AIL_OTHER, RG_NAILMENTS };
 
 #define RG_VERBS 16
 #define ACT_SIZES {RG_VERBS, 8, 8, RG_NSKILLS}
@@ -316,6 +335,17 @@ static void rg_world_step(Env* env) {
 
 static int rg_job_slot(int job) { return job >= 0 && job <= 6 ? job : 7; }
 
+// Ailments from a body state (rAthena's OPT1_*: 1 stone, 6 turning to stone, 2 frozen, 3 stunned,
+// 4 asleep) and a health state (OPT2_* bits): RG_NAILMENTS flags.
+static void rg_ailments(int opt1, int opt2, float* out) {
+    out[RG_AIL_STONE] = opt1 == 1 || opt1 == 6;
+    out[RG_AIL_FREEZE] = opt1 == 2;
+    out[RG_AIL_STUN] = opt1 == 3;
+    out[RG_AIL_SLEEP] = opt1 == 4;
+    out[RG_AIL_POISON] = (opt2 & (RO_OPT2_POISON | RO_OPT2_DPOISON)) != 0;
+    out[RG_AIL_OTHER] = (opt2 & (RO_OPT2_CURSE | RO_OPT2_SILENCE | RO_OPT2_BLIND | RO_OPT2_BLEEDING)) != 0;
+}
+
 // Can the bot cast RG_SKILLS[k] right now? Returns its level, or 0.
 static int rg_skill_ready(const RoClient* c, int k) {
     if (!RG_SKILLS[k] || c->cast_until > c->now) return 0;
@@ -467,7 +497,7 @@ static void rg_observe(Env* env, int i) {
     // Goal: the task one-hot, its difficulty (navigation's way to the target; the other tasks have
     // none yet), the job.
     o[RG_OBS_GOAL + b->task] = 1;
-    o[RG_OBS_GOAL + RG_TASKS_MAX + 4 + rg_job_slot(c->job)] = 1;
+    o[RG_OBS_GOAL + RG_GOAL_JOB + rg_job_slot(c->job)] = 1;
     if (b->task == RG_TASK_NAVIGATION && c->state == RO_IN_GAME) {
         int x, y;
         ro_self_pos(c, &x, &y);
@@ -508,6 +538,15 @@ static void rg_observe(Env* env, int i) {
         int seen = 0;
         for (int u = 0; u < c->nunits; u++) seen += c->units[u].type == RO_OBJ_MOB;
         s[18] = seen / 8.0f;
+        // Effects on the bot: status icons with the share of their time left, then ailments.
+        float* e = o + RG_OBS_EFFECTS;
+        for (int i = 0; i < RG_EFFECT_ICONS; i++) {
+            e[i * RG_EFFECT_F] = ro_effect_left(c, RG_EFFECT_EFST[i]) > 0;
+            e[i * RG_EFFECT_F + 1] = ro_effect_share(c, RG_EFFECT_EFST[i]);
+        }
+        float ail[RG_NAILMENTS];
+        rg_ailments(c->opt1, c->opt2, ail);
+        for (int i = 0; i < RG_NAILMENTS; i++) e[(RG_EFFECT_ICONS + i) * RG_EFFECT_F] = ail[i];
         float* k = o + RG_OBS_CAST;
         k[0] = c->cast_until > c->now;
         k[1] = c->cast_until > c->now ? (float)(c->cast_until - c->now) / 2000.0f : 0;
@@ -569,6 +608,7 @@ static void rg_observe(Env* env, int i) {
                 f[10] = info->aggressive;
                 f[11 + (info->element < 10 ? info->element : 0)] = 1;
             }
+            rg_ailments(u->opt1, u->opt2, f + 21);
             b->slot_mob[m] = u->id;
         }
         int used[RO_MAX_GROUND] = {0};

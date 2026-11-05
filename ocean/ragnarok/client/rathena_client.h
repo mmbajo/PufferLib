@@ -99,7 +99,25 @@ typedef struct RoUnit {
     uint8_t boss;
     uint8_t hit_by_me;
     double last_hit_me;  // client ms, 0 if never
+    int16_t opt1, opt2;  // body state (1 stone, 2 frozen, 3 stunned, 4 asleep, 6 turning to stone) and
+    int32_t option;      // health state bits (RO_OPT2_*); option bits (hidden, cloaked, cart, ...)
 } RoUnit;
+
+// Health state bits (rAthena's OPT2_*): poisoned (and deadly poison), cursed, silenced, blind,
+// bleeding.
+#define RO_OPT2_POISON 0x01
+#define RO_OPT2_CURSE 0x02
+#define RO_OPT2_SILENCE 0x04
+#define RO_OPT2_BLIND 0x10
+#define RO_OPT2_BLEEDING 0x40
+#define RO_OPT2_DPOISON 0x80
+
+// A status effect on the bot (a status icon: rAthena's EFST_* id), with when it ends.
+#define RO_MAX_EFFECTS 64
+typedef struct RoEffect {
+    int16_t id;
+    double until, total;  // client ms; until 0: no end was given
+} RoEffect;
 
 typedef struct RoGround {
     uint32_t id;
@@ -163,6 +181,10 @@ typedef struct RoClient {
     uint16_t cast_skill;
     double skill_failed_at;    // the last rejected skill request (ZC_ACK_TOUSESKILL)
     uint16_t skill_failed_id, skill_failed_cause;
+    RoEffect effects[RO_MAX_EFFECTS];  // status icons on the bot
+    int neffects;
+    int16_t opt1, opt2;        // the bot's body and health state, as for units
+    int32_t option;
 
     // World around it.
     RoUnit units[RO_MAX_UNITS];
@@ -200,6 +222,10 @@ RO_API int ro_fail(RoClient* c, const char* fmt, ...) {
 }
 
 RO_API uint16_t ro_u16(const uint8_t* p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+RO_API uint32_t ro_u32(const uint8_t* p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
 
 RO_API void ro_put16(uint8_t* p, uint16_t v) { p[0] = v & 0xff; p[1] = v >> 8; }
 
@@ -609,6 +635,42 @@ RO_API const RoSkill* ro_skill_find(const RoClient* c, int id) {
     return NULL;
 }
 
+// A status effect on the bot: the ms it has left (1e9 when no end was given), or 0 if it is off.
+RO_API double ro_effect_left(const RoClient* c, int id) {
+    for (int i = 0; i < c->neffects; i++)
+        if (c->effects[i].id == id) {
+            if (c->effects[i].until <= 0) return 1e9;
+            return c->effects[i].until > c->now ? c->effects[i].until - c->now : 0;
+        }
+    return 0;
+}
+
+// The share of a status effect's time that is left: 1 when no end was given, 0 if it is off.
+RO_API float ro_effect_share(const RoClient* c, int id) {
+    for (int i = 0; i < c->neffects; i++)
+        if (c->effects[i].id == id) {
+            if (c->effects[i].until <= 0 || c->effects[i].total <= 0) return 1;
+            return c->effects[i].until > c->now ? (float)((c->effects[i].until - c->now) / c->effects[i].total) : 0;
+        }
+    return 0;
+}
+
+static void ro_effect_set(RoClient* c, int id, int on, double total, double left) {
+    int i = 0;
+    while (i < c->neffects && c->effects[i].id != id) i++;
+    if (!on) {
+        if (i < c->neffects) c->effects[i] = c->effects[--c->neffects];
+        return;
+    }
+    if (i == c->neffects) {
+        if (c->neffects == RO_MAX_EFFECTS) return;
+        c->neffects++;
+    }
+    c->effects[i].id = (int16_t)id;
+    c->effects[i].until = left > 0 ? c->now + left : 0;
+    c->effects[i].total = total > 0 ? total : left;
+}
+
 // Use a skill on a unit (a monster, a player, or ourselves: target = c->aid).
 RO_API int ro_use_skill(RoClient* c, int id, int level, uint32_t target) {
     uint8_t p[RO_CZ_USESKILLTOID_LEN] = {0};
@@ -791,6 +853,11 @@ RO_API void ro_unit_from_packet(RoClient* c, const uint8_t* buf, int cmd) {
     u->type = idle->objecttype;
     u->cls = idle->job;
     u->speed = idle->speed;
+#ifdef RO_HAS_packet_idle_unit_bodyState
+    u->opt1 = idle->bodyState;
+    u->opt2 = idle->healthState;
+    u->option = idle->effectState;
+#endif
     u->t0 = c->now;
     if (cmd == RO_TYPE_unit_walkingType) {
         const RO_packet_unit_walking* w = (const RO_packet_unit_walking*)(buf);
@@ -1066,6 +1133,40 @@ RO_API void ro_handle(RoClient* c, const uint8_t* buf, int len) {
         break;
     }
     case RO_HEADER_ZC_ATTACK_RANGE: c->attack_range = ((const RO_PACKET_ZC_ATTACK_RANGE*)buf)->currentAttRange; break;
+    // Status icons, the bot's own: <efst>.W <id>.L <on>.B, then the times as the client version has them.
+#ifdef RO_TYPE_status_changeType
+    case RO_TYPE_status_changeType:  // ZC_MSG_STATE_CHANGE3: <total>.L <left>.L <val>.3L
+        if (ro_u32(buf + 4) == c->aid) ro_effect_set(c, ro_u16(buf + 2), buf[8], ro_u32(buf + 9), ro_u32(buf + 13));
+        break;
+#endif
+#ifdef RO_TYPE_status_change2Type
+    case RO_TYPE_status_change2Type:  // ZC_MSG_STATE_CHANGE2: <left>.L <val>.3L
+        if (ro_u32(buf + 4) == c->aid) ro_effect_set(c, ro_u16(buf + 2), buf[8], 0, ro_u32(buf + 9));
+        break;
+#endif
+#ifdef RO_TYPE_status_change_endType
+    case RO_TYPE_status_change_endType:  // ZC_MSG_STATE_CHANGE: no times (an end, or timers off)
+        if (ro_u32(buf + 4) == c->aid) ro_effect_set(c, ro_u16(buf + 2), buf[8], 0, 0);
+        break;
+#endif
+#ifdef RO_HEADER_ZC_STATE_CHANGE
+    case RO_HEADER_ZC_STATE_CHANGE: {  // <id>.L <body>.W <health>.W <option>.L <pk>.B, for anyone in sight
+        uint32_t id = ro_u32(buf + 2);
+        int16_t opt1 = (int16_t)ro_u16(buf + 6), opt2 = (int16_t)ro_u16(buf + 8);
+        int32_t option = (int32_t)ro_u32(buf + 10);
+        RoUnit* u = id == c->aid ? NULL : ro_unit_find(c, id);
+        if (id == c->aid) {
+            c->opt1 = opt1;
+            c->opt2 = opt2;
+            c->option = option;
+        } else if (u) {
+            u->opt1 = opt1;
+            u->opt2 = opt2;
+            u->option = option;
+        }
+        break;
+    }
+#endif
     case RO_ZC_LOCKSTEP_DONE: {  // <step>.L <tick>.L: the step has been sent in full
         uint32_t tick;
         memcpy(&c->steps_done, buf + 2, 4);
