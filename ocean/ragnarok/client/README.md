@@ -11,7 +11,7 @@ trainer compiles the env with nvcc.
 | `rathena_packets.h` | Generated, do not edit: packet ids (`RO_HEADER_*`, `RO_TYPE_*`, `RO_CZ_*`), lengths, C structs and which fields they have (`RO_HAS_*`), for one client version and rule set |
 | `rathena_mobs.h` | Generated, do not edit: monster level, HP, attack, defense, element, aggressiveness and boss flag, so the env can describe monsters by their properties |
 | `scripted_bot.c` | Hand-written bots that level novices: the baseline, and the end-to-end test |
-| `gen/gen_packets.py`, `gen/gen_mobs.py` | Write the two generated headers from rAthena's own source and database |
+| `gen/gen_packets.py`, `gen/gen_mobs.py`, `gen/gen_atlas.py` | Write the generated headers from rAthena's own source and database: packets, monsters, and the travel region's maps and warps (`rathena_atlas.h`) |
 
 ## Build
 
@@ -19,6 +19,7 @@ trainer compiles the env with nvcc.
 gcc -std=gnu11 -O2 -Wall -Wextra -o scripted_bot scripted_bot.c -lz -lm -lpthread
 python3 gen/gen_packets.py [rathena_dir] [packetver] [pre-re|re] [out.h]   # after rAthena's packets change
 python3 gen/gen_mobs.py [rathena_dir] [pre-re|re] [out.h]
+python3 gen/gen_atlas.py [rathena_dir] [pre-re|re] [map ...]   # the travel region: RG_TRAVEL_MAPS in slurm/world.sh
 ```
 
 Both generators default to the version and rules the rAthena checkout was configured with (its

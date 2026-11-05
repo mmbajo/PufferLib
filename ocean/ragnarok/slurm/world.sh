@@ -29,7 +29,9 @@ WORLD_DB_NAME=ro-wdb-$SLURM_JOB_ID
 WORLD_START_POINT=${WORLD_START_POINT:-prt_fild08,200,200}
 WORLD_START_ITEMS=${WORLD_START_ITEMS:-1207,1,2:2301,1,16:501,30,0}
 # Every training task's map, for lean training worlds; server/npc/rl_train.txt lists the same maps.
-RG_TASK_MAPS="prt_fild08 pay_fild01 moc_fild02 mjolnir_01 pay_fild07"
+# The travel task's region: fields joined by warps (the first is client/rathena_atlas.h's origin).
+RG_TRAVEL_MAPS="prt_fild05 prt_fild04 prt_fild07 prt_fild09"
+RG_TASK_MAPS="prt_fild08 pay_fild01 moc_fild02 mjolnir_01 pay_fild07 $RG_TRAVEL_MAPS"
 WORLD_PIDS=()
 
 wlog() {
@@ -112,16 +114,23 @@ world_create() {
     done
     if [ "${WORLD_LEAN:-0}" = 1 ]; then
         # Lean world: only the maps in WORLD_MAPS (default: the start point's), their monsters
-        # (rAthena's spawn lines for them plus server/npc/*.txt) and the training script, instead
-        # of 1265 maps and every NPC.
+        # (rAthena's spawn lines for them plus server/npc/*.txt), the warps between the maps in
+        # WORLD_WARP_MAPS (default: the travel region) and the training script, instead of 1265 maps
+        # and every NPC.
         local maps=${WORLD_MAPS:-${WORLD_START_POINT%%,*}} m rules
         rules=$(world_rules)
         rm $dir/conf/maps_athena.conf
         for m in $maps; do echo "map: $m"; done > $dir/conf/maps_athena.conf
         mkdir -p $dir/npc/$rules
         for m in $maps; do grep -h "^$m," $RATHENA/npc/$rules/mobs/fields/*.txt; done > $dir/npc/field_mobs.txt
+        local warp_maps=" ${WORLD_WARP_MAPS-$RG_TRAVEL_MAPS} "
+        awk -F'\t' -v maps="$warp_maps" '$2 == "warp" {
+            split($1, src, ","); split($4, dst, ",")
+            if (index(maps, " " src[1] " ") && index(maps, " " dst[3] " ") && src[1] != dst[3]) print
+        }' $RATHENA/npc/$rules/warps/*/*.txt > $dir/npc/field_warps.txt
         {
             echo "npc: npc/field_mobs.txt"
+            echo "npc: npc/field_warps.txt"
             for f in $RG/server/npc/*.txt; do echo "npc: $f"; done
         } > $dir/npc/$rules/scripts_main.conf
     else
