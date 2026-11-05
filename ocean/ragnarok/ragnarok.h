@@ -4,8 +4,9 @@
 // puf_init logs in through client/rathena_client.h. Env i uses world i (127.0.0.1, ports
 // $RO_WORLD_PORT_BASE+10i, default 7000), the accounts in $RO_WORLD_ROOT/w<i>/accounts and
 // rAthena's db/ in $RO_DB_DIR. One env per world: two envs on one world would wait for each other's
-// bots. Each puf_init claims the next block of num_agents accounts (w<i>/next_block), since rAthena
-// keeps a just-logged-out account "online" for up to 30 s and a sweep starts a new process per trial.
+// bots. Each puf_init claims the next block of num_agents accounts (w<i>/next_block, wrapping around),
+// since rAthena keeps a just-logged-out account "online" for up to 30 s and a sweep starts a new
+// process per trial.
 //
 // Steps. A world step is 100 ms of game time. With lockstep = 1 (training worlds) the env turns
 // every action into requests, sends READY for every bot, and waits for the server's DONE; with
@@ -597,30 +598,34 @@ void puf_init(Env* env, Dict* kwargs) {
     snprintf(path, sizeof path, "%s/w%d/accounts", root, world);
     FILE* f = fopen(path, "r");
     if (!f) rg_die("cannot open %s%s (one env per world: is total_agents / num_agents <= the worlds started?)", path, "");
-    // The next unused block of accounts (see the top of this file), plus RG_ACCOUNT_OFFSET if set.
+    // The next block of accounts (see the top of this file), after RG_ACCOUNT_OFFSET accounts if set.
+    // Blocks are taken in turn and wrap around, so a block comes back only after every other one.
+    const char* skip = getenv("RG_ACCOUNT_OFFSET");
+    int offset = skip ? atoi(skip) : 0, accounts = 0;
+    char user[64], pass[64];
+    while (fscanf(f, "%63s %63s", user, pass) == 2) accounts++;
+    int blocks = (accounts - offset) / env->num_agents;
+    if (blocks < 1) rg_die("%s has too few accounts%s (raise WORLD_ACCOUNT_BLOCKS)", path, "");
     int block = 0;
     char block_path[512];
     snprintf(block_path, sizeof block_path, "%s/w%d/next_block", root, world);
     FILE* bf = fopen(block_path, "r+");
     if (bf) {
         flock(fileno(bf), LOCK_EX);
-        if (fscanf(bf, "%d", &block) != 1) block = 0;
+        if (fscanf(bf, "%d", &block) != 1 || block < 0) block = 0;
+        block %= blocks;
         rewind(bf);
-        fprintf(bf, "%d\n", block + 1);
+        fprintf(bf, "%d\n", (block + 1) % blocks);
         fflush(bf);
         flock(fileno(bf), LOCK_UN);
         fclose(bf);
     }
-    const char* skip = getenv("RG_ACCOUNT_OFFSET");
-    for (int i = 0, n = block * env->num_agents + (skip ? atoi(skip) : 0); i < n; i++) {
-        char user[64], pass[64];
-        if (fscanf(f, "%63s %63s", user, pass) != 2)
-            rg_die("%s has too few accounts%s (raise WORLD_ACCOUNT_BLOCKS)", path, "");
-    }
+    rewind(f);
+    for (int i = 0; i < offset + block * env->num_agents; i++)
+        if (fscanf(f, "%63s %63s", user, pass) != 2) rg_die("%s has too few accounts%s", path, "");
     const char* port_base = getenv("RO_WORLD_PORT_BASE");
     for (int i = 0; i < env->num_agents; i++) {
         RoClient* c = &env->bots[i].c;
-        char user[64], pass[64];
         if (fscanf(f, "%63s %63s", user, pass) != 2) rg_die("%s has too few accounts%s", path, "");
         snprintf(c->user, sizeof c->user, "%.23s", user);
         snprintf(c->pass, sizeof c->pass, "%.23s", pass);
