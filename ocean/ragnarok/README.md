@@ -61,7 +61,7 @@ baselines are the scripted bots in `ragnarok_check.c`.
 | 5 `acolyte_skills` | Acolyte: Heal 5, Blessing 5, Increase AGI 5, Club | `pay_fild01`: Spores | 0.269 |
 | 6 `thief_skills` | Thief: Double Attack 10, Envenom 5, Steal 3, Hiding 2, Main Gauche | `prt_fild03` | 1.588 |
 | 7 `merchant_skills` | Merchant: Mammonite 10 with 200,000 zeny, Axe | `mjolnir_01` | 1.053 |
-| 8 `navigation` | The field's Novice, walking to a cell 10–120 cells away; the goal gives the way there | `prt_fild08` | 0.386 cells per step (about 70% arrive within 1,200 steps) |
+| 8 `navigation` | The field's Novice, walking to a cell 10–120 cells away; the goal gives the way there | `prt_fild08` | 0.392 cells per step (about 70% arrive within 1,200 steps) |
 
 ## Layout
 
