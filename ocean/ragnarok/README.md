@@ -57,8 +57,9 @@ one GPU job on one node
 - **One env per world**, since a world steps only when all of its bots are ready.
 
 Every class task is a first class at levels 25/25 with its skills, weapon and 30 Red Potions, on a
-renewal field (client 20221005) whose monsters are near its level. The baselines are the scripted bots
-in `ragnarok_check.c` on renewal (job 5007175).
+renewal field whose monsters are near its level. The baselines are the scripted bots in
+`ragnarok_check.c` on renewal client 20221005 (job 5007175); client 20250402 gives the same within
+run-to-run noise.
 
 | Task | Character | Map | Baseline (exp per step) |
 |---|---|---|---|
@@ -89,9 +90,10 @@ in `ragnarok_check.c` on renewal (job 5007175).
 
 1. Build rAthena with the patches:
    - `git am server/patches/*.patch` on rAthena `d4b8e7b`;
-   - then `./configure --enable-epoll --enable-packetver=20221005 --with-maxconn=8192` (renewal) and
-     `make server`, as `slurm/build-train.sbatch` does in `~/ragnarok/rathena-re`. The bot client's
-     packet table speaks that build, and the world jobs use it by default.
+   - then `./configure --enable-epoll --enable-packetver=20250402 --with-maxconn=8192` (renewal) and
+     `make server`, as `slurm/build-train.sbatch` does in `~/ragnarok/rathena-2025`. The bot client's
+     packet table speaks that build, the play server's version, and the world jobs use it by
+     default. `~/ragnarok/rathena-re` is the same code built for client 20221005.
    - The earlier pre-renewal build is `~/ragnarok/rathena-train` (client 20130618, `PRERE=yes`).
      World jobs use it with `RATHENA=~/ragnarok/rathena-train`, after regenerating the client's
      tables for it (`client/README.md`).

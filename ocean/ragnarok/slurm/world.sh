@@ -14,7 +14,7 @@
 
 RO=/home/user02198/ragnarok
 RG=${RG:-$RO/PufferLib/ocean/ragnarok}  # this env's directory: server/npc, client/
-RATHENA=${RATHENA:-$RO/rathena}
+RATHENA=${RATHENA:-$RO/rathena-2025}
 WORLD_IMG=${WORLD_IMG:-$RO/images/mariadb-noble.sqsh}
 WORLD_ROOT=${WORLD_ROOT:-/tmp/ro-world-$SLURM_JOB_ID}
 WORLD_LOGS=${WORLD_LOGS:-$RO/train/logs}

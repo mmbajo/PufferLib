@@ -23,7 +23,7 @@ python3 gen/gen_atlas.py [rathena_dir] [pre-re|re] [map ...]   # the travel regi
 ```
 
 Both generators default to the version and rules the rAthena checkout was configured with (its
-`src/map/Makefile`), so after a build `python3 gen/gen_packets.py ~/ragnarok/rathena-re` writes the
+`src/map/Makefile`), so after a build `python3 gen/gen_packets.py ~/ragnarok/rathena-2025` writes the
 matching table. `gen_packets.py` compiles small programs against rAthena's headers; run it on a
 compute node. Every mirrored struct gets a size check at compile time, so a layout that drifts from
 rAthena fails to build. To build against another table without replacing these, pass

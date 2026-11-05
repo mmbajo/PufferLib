@@ -67,7 +67,8 @@ static const char* RG_TASK_NAMES[RG_NTASKS] = {"field",       "sword_skills",  "
 // which the exp reward is normalized so that every task pays the same there; a death costs the same
 // everywhere. Jobs 5007175, 5007250 (the mini-boss) and 5007367 (travel, with 3,000-step episodes)
 // measured all of them on renewal (client 20221005, 12,000 or more steps per task), so perf does not
-// compare with the pre-renewal G0 and G1 runs.
+// compare with the pre-renewal G0 and G1 runs. Client 20250402 gives the same within run-to-run noise
+// (jobs 5008301, 5008302 and 5008304, against 5008331 to 5008333 on 20221005 with the same code).
 static const float RG_TASK_BASELINE[RG_NTASKS] = {2.314f, 2.293f, 2.379f, 2.246f, 3.541f,
                                                   2.646f, 2.944f, 2.958f, 0.394f, 0.830f, 0.327f};
 static const float RG_TASK_REWARD[RG_NTASKS] = {0.005121f, 0.000218f, 0.000428f, 0.000230f, 0.000361f,

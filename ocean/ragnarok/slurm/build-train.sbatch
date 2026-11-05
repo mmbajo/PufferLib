@@ -1,9 +1,9 @@
 #!/bin/bash
-# Build the training rAthena in ~/ragnarok/rathena-re (branch local/lockstep): client 20221005 with
-# renewal rules, plus the lockstep patch and room for 8192 connections per server. Submit with
+# Build the training rAthena in ~/ragnarok/rathena-2025 (branch local/lockstep-2025): client 20250402
+# with renewal rules, plus the lockstep patch and room for 8192 connections per server. Submit with
 # slurm/submit.sh build-train.sbatch. Another checkout, client version or rules:
-# --export=ALL,RATHENA=<dir>,PACKETVER=<yyyymmdd>,PRERE=yes (pre-renewal; ~/ragnarok/rathena-train is
-# 20130618 pre-renewal); SCRATCH moves the build's TMPDIR off the node's /tmp.
+# --export=ALL,RATHENA=<dir>,PACKETVER=<yyyymmdd>,PRERE=yes (pre-renewal; ~/ragnarok/rathena-re is
+# 20221005, ~/ragnarok/rathena-train 20130618 pre-renewal); SCRATCH moves the build's TMPDIR off the node's /tmp.
 #SBATCH --job-name=ro-build-train
 #SBATCH --partition=002-partition-cpu
 #SBATCH --cpus-per-task=16
@@ -20,8 +20,8 @@ if [ -n "$others" ]; then
     exit 3
 fi
 
-RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-re}
-PACKETVER=${PACKETVER:-20221005}
+RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-2025}
+PACKETVER=${PACKETVER:-20250402}
 PRERE=${PRERE:-no}
 export TMPDIR=${SCRATCH:-/tmp}/ro-build-$SLURM_JOB_ID
 mkdir -p "$TMPDIR"

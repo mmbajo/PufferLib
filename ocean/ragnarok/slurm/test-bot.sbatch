@@ -15,9 +15,9 @@ NBOTS=${1:-4}
 MINUTES=${2:-10}
 DIE_AFTER=${3:-120}
 export WORLD_GM_BOT=1
-# MODE=lockstep: the training build (~/ragnarok/rathena-re) with the clock stepped by the bots.
+# MODE=lockstep: the training build (~/ragnarok/rathena-2025) with the clock stepped by the bots.
 if [ "${MODE:-realtime}" = lockstep ]; then
-    export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-re}
+    export RATHENA=${RATHENA:-/home/user02198/ragnarok/rathena-2025}
     export WORLD_MAP_CONF=$'lockstep: yes\nlockstep_debug: yes\nautosave_time: 3600'
     BOT_FLAGS="${BOT_FLAGS:-} --lockstep"
 fi
