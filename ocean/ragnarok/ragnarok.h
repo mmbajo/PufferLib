@@ -71,6 +71,12 @@ static const float RG_TASK_REWARD[RG_NTASKS] = {0.002628f, 0.000154f, 0.001082f,
 #define RG_NAV_MIN 10
 #define RG_NAV_MAX 120
 #define RG_NAV_UNIT 100.0f
+// The curriculum's prerequisites: the tasks (bits) each task builds on. The class skills and
+// navigation build on field leveling, survival on the Swordman skills.
+static const unsigned RG_TASK_NEEDS[RG_NTASKS] = {0, 1u << RG_TASK_FIELD, 1u << RG_TASK_SWORD_SKILLS,
+                                                  1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD,
+                                                  1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD,
+                                                  1u << RG_TASK_FIELD, 1u << RG_TASK_FIELD};
 
 // ---- layout v2 -------------------------------------------------------------------------------
 
@@ -151,6 +157,8 @@ struct Log {
     float task_perf[RG_LOG_TASKS];
     float task_n[RG_LOG_TASKS];
     float task_w[RG_LOG_TASKS];  // nonzero for the tasks in the mix, so their keys are always logged
+    float task_p[RG_LOG_TASKS];  // the curriculum's chance of drawing each task, when an episode ended
+    float curriculum;            // nonzero when the curriculum draws the tasks
     float n;
 };
 
@@ -184,6 +192,8 @@ struct Env {
     int lockstep, episode_steps, action_repeat;
     float reward_scale, reward_job, reward_death;
     float task_weight[RG_NTASKS];
+    int curriculum;
+    float curriculum_floor, curriculum_unlock, curriculum_fast, curriculum_slow;
     unsigned int seed;
     double next_step;  // real time: when the current step ends
     unsigned char* nav_reached;  // navigation's search: cells within RG_NAV_MAX of a bot
@@ -203,16 +213,83 @@ static void rg_die(const char* fmt, const char* a, const char* b) {
     exit(1);
 }
 
-static int rg_draw_task(Env* env) {
+// The curriculum (curriculum = 1). The task weights then say only which tasks are in the mix and how
+// much each counts; one sampler, shared by every env of the process, picks each episode's task:
+// - a task unlocks, for good, once each task it builds on (RG_TASK_NEEDS) that is in the mix averages
+//   perf >= curriculum_unlock;
+// - unlocked tasks are drawn in proportion to their learning progress, |fast - slow| for two moving
+//   averages of their perf over episodes (rates curriculum_fast and curriculum_slow), times their
+//   weight, and each gets at least curriculum_floor of the episodes.
+// Envs step in parallel threads, so the sampler updates under a lock.
+typedef struct {
+    float fast[RG_NTASKS], slow[RG_NTASKS];
+    long episodes[RG_NTASKS];
+    int unlocked[RG_NTASKS];
+} RgCurriculum;
+static RgCurriculum rg_curriculum;
+static pthread_mutex_t rg_curriculum_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Each task's chance of being drawn next.
+static void rg_task_chances(Env* env, float* p) {
     float total = 0;
-    for (int t = 0; t < RG_NTASKS; t++) total += env->task_weight[t];
-    if (total <= 0) return RG_TASK_FIELD;
-    float u = (float)rand_r(&env->seed) / RAND_MAX * total;
-    for (int t = 0; t < RG_NTASKS; t++) {
-        u -= env->task_weight[t];
-        if (u <= 0 && env->task_weight[t] > 0) return t;
+    for (int t = 0; t < RG_NTASKS; t++) total += p[t] = env->task_weight[t] > 0 ? env->task_weight[t] : 0;
+    if (env->curriculum) {
+        RgCurriculum* k = &rg_curriculum;
+        pthread_mutex_lock(&rg_curriculum_lock);
+        int open = 0;
+        float progress = 0;
+        for (int t = 0; t < RG_NTASKS; t++) {
+            if (p[t] <= 0) continue;
+            int ready = 1;
+            for (int need = 0; need < RG_NTASKS; need++)
+                if ((RG_TASK_NEEDS[t] >> need & 1) && env->task_weight[need] > 0
+                    && !(k->unlocked[need] && k->episodes[need] > 0 && k->slow[need] >= env->curriculum_unlock))
+                    ready = 0;
+            k->unlocked[t] |= ready;
+            if (!k->unlocked[t]) {
+                p[t] = 0;
+                continue;
+            }
+            open++;
+            p[t] *= fabsf(k->fast[t] - k->slow[t]) + 1e-3f;
+            progress += p[t];
+        }
+        pthread_mutex_unlock(&rg_curriculum_lock);
+        float floor = open * env->curriculum_floor < 1 ? env->curriculum_floor : 1.0f / (open > 0 ? open : 1);
+        total = 0;
+        for (int t = 0; t < RG_NTASKS; t++) {
+            if (p[t] > 0) p[t] = floor + (1 - floor * open) * p[t] / progress;
+            total += p[t];
+        }
     }
-    return RG_NTASKS - 1;
+    for (int t = 0; t < RG_NTASKS; t++) p[t] = total > 0 ? p[t] / total : t == RG_TASK_FIELD;
+}
+
+static int rg_draw_task(Env* env) {
+    float p[RG_NTASKS];
+    rg_task_chances(env, p);
+    float u = (float)rand_r(&env->seed) / RAND_MAX;
+    int last = RG_TASK_FIELD;
+    for (int t = 0; t < RG_NTASKS; t++) {
+        if (p[t] <= 0) continue;
+        last = t;
+        u -= p[t];
+        if (u <= 0) return t;
+    }
+    return last;
+}
+
+// An episode of the task ended with this perf: update its moving averages (running means at first).
+static void rg_curriculum_add(Env* env, int task, float perf) {
+    if (!env->curriculum) return;
+    RgCurriculum* k = &rg_curriculum;
+    pthread_mutex_lock(&rg_curriculum_lock);
+    long n = ++k->episodes[task];
+    float fast = env->curriculum_fast > 1.0f / n ? env->curriculum_fast : 1.0f / n;
+    float slow = env->curriculum_slow > 1.0f / n ? env->curriculum_slow : 1.0f / n;
+    k->fast[task] += fast * (perf - k->fast[task]);
+    k->slow[task] += slow * (perf - k->slow[task]);
+    pthread_mutex_unlock(&rg_curriculum_lock);
 }
 
 static void rg_world_step(Env* env) {
@@ -666,6 +743,13 @@ static void rg_end_episode(Env* env, RgBot* b) {
         env->log.task_n[b->task] += 1;
     }
     for (int t = 0; t < RG_NTASKS && t < RG_LOG_TASKS; t++) env->log.task_w[t] = env->task_weight[t] > 0;
+    rg_curriculum_add(env, b->task, perf);
+    if (env->curriculum) {
+        float p[RG_NTASKS];
+        rg_task_chances(env, p);
+        for (int t = 0; t < RG_NTASKS && t < RG_LOG_TASKS; t++) env->log.task_p[t] += p[t];
+        env->log.curriculum += 1;
+    }
     env->log.n += 1;
     rg_start_reset(env, b);
 }
@@ -684,6 +768,11 @@ void puf_init(Env* env, Dict* kwargs) {
         snprintf(key, sizeof key, "task%d_weight", t);
         env->task_weight[t] = dict_get(kwargs, key);
     }
+    env->curriculum = dict_get(kwargs, "curriculum");
+    env->curriculum_floor = dict_get(kwargs, "curriculum_floor");
+    env->curriculum_unlock = dict_get(kwargs, "curriculum_unlock");
+    env->curriculum_fast = dict_get(kwargs, "curriculum_fast");
+    env->curriculum_slow = dict_get(kwargs, "curriculum_slow");
     env->seed = 12345u + 7919u * env->rng;
     env->agents = (Agent*)calloc(env->num_agents, sizeof(Agent));
     env->bots = (RgBot*)calloc(env->num_agents, sizeof(RgBot));
@@ -955,6 +1044,10 @@ void puf_log(Log* log, Dict* out) {
         dict_set(out, key, log->task_n[t] > 0 ? log->task_perf[t] / log->task_n[t] : 0);
         snprintf(key, sizeof key, "%s_share", RG_TASK_NAMES[t]);
         dict_set(out, key, log->task_n[t]);
+        if (log->curriculum > 0) {
+            snprintf(key, sizeof key, "%s_chance", RG_TASK_NAMES[t]);
+            dict_set(out, key, log->task_p[t]);
+        }
     }
     dict_set(out, "n", log->n);
 }
